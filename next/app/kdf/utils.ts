@@ -1,7 +1,6 @@
 import { base_decode } from "near-api-js/lib/utils/serialize";
 import { ec as EC } from "elliptic";
 import { Address, keccak256 } from "viem";
-import { sha3_256 } from "js-sha3";
 
 export function najPublicKeyStrToUncompressedHexPoint(
   najPublicKeyStr: string
@@ -16,9 +15,12 @@ export function deriveChildPublicKey(
   path: string = ""
 ): string {
   const ec = new EC("secp256k1");
-  const scalarHex = sha3_256(
-    `near-mpc-recovery v0.1.0 epsilon derivation:${signerId},${path}`
-  );
+
+  const CHAIN_ID_ETHEREUM= "0x1";        
+  const EPSILON_DERIVATION_PREFIX = "sig.network v1.0.0 epsilon derivation";
+  const derivation_path = `${EPSILON_DERIVATION_PREFIX},${CHAIN_ID_ETHEREUM},${signerId},${path}`;
+
+  const scalarHex = keccak256(Buffer.from(derivation_path)).slice(2);
 
   const x = parentUncompressedPublicKeyHex.substring(2, 66);
   const y = parentUncompressedPublicKeyHex.substring(66);
