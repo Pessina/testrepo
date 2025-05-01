@@ -5,15 +5,19 @@
   "private": true,
   "scripts": {
     "dev": "bun --watch index.ts",
-    "deployStrategy": "bun src/eigen-layer/deploy-strategy/deployStrategy.ts"
+    "deploy:strategy": "bun src/eigen-layer/deploy-strategy/deployStrategy.ts",
+    "deploy:strategy:verbose": "bun src/eigen-layer/deploy-strategy/deployStrategy.ts --verbose"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/commander": "^2.12.2"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
     "dotenv": "^16.5.0",
     "viem": "^2.28.1"
   }
