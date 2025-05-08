@@ -4,7 +4,6 @@ import {
   beginCell,
   TonClient,
   fromNano,
-  toNano,
   WalletContractV5R1,
   SendMode,
   internal,
@@ -42,7 +41,7 @@ async function main() {
     console.log("Connected to TON network");
 
     // Parse the pool address
-    const poolAddress = POOL_ADDRESSES[0];
+    const poolAddress = POOL_ADDRESSES[1];
     console.log(`Pool address: ${poolAddress.toString({ bounceable: true })}`);
 
     // Generate wallet from mnemonic
@@ -118,7 +117,7 @@ async function main() {
     const withdrawBody = beginCell()
       .storeUint(OP_STAKE_WITHDRAW, 32) // op
       .storeUint(Date.now(), 64) // query id
-      .storeCoins(1000000000) // gas limit
+      .storeCoins(100000) // gas limit
       .storeCoins(totalBalance) // withdraw full balance explicitly
       .endCell();
 
@@ -150,7 +149,7 @@ async function main() {
 
       // Wait a bit and check for transaction status
       console.log("Waiting for transaction confirmation...");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 15000));
 
       // Check the balance again to see if withdrawal was successful
       const newBalance = await getStakedBalance(
