@@ -43,7 +43,7 @@ Before the `vesting_start_time`, all `vesting_total_amount` are locked.
 
 Starting from `vesting_start_time` the amount starts to unlock proportionately.
 
-For example if `vesting_total_duration` is 10 months, and `unlock_period` is 1 month, and `vesting_total_amount` is 500 TON then every month will unlock 500*(10/100)=50 TON, and in 10 months all 500 TON will be unlocked.
+For example if `vesting_total_duration` is 10 months, and `unlock_period` is 1 month, and `vesting_total_amount` is 500 TON then every month will unlock 500\*(10/100)=50 TON, and in 10 months all 500 TON will be unlocked.
 
 If there is a cliff period, nothing is unlocked during this cliff period, and after it has passed, the amount is unlocked according to the formula above.
 
@@ -97,7 +97,6 @@ Messages that can be sent to the `vesting_sender_address` have the following res
 
 - only `send_mode == 3` allowed;
 
-
 In most cases, addresses are added to the whitelist to allow the user to validate using locked coins or to stake locked coins into the pools.
 
 To avoid theft of Toncoins, messages that can be sent to the whitelist have the following restrictions:
@@ -128,10 +127,10 @@ No restrictions apply when sending unlocked Toncoins, even if we send to whiteli
 
 ## Project structure
 
--   `contracts` - source code of all the smart contracts of the project and their dependencies.
--   `wrappers` - wrapper classes (implementing `Contract` from ton-core) for the contracts, including any [de]serialization primitives and compilation functions.
--   `tests` - tests for the contracts.
--   `scripts` - scripts used by the project, mainly the deployment scripts.
+- `contracts` - source code of all the smart contracts of the project and their dependencies.
+- `wrappers` - wrapper classes (implementing `Contract` from ton-core) for the contracts, including any [de]serialization primitives and compilation functions.
+- `tests` - tests for the contracts.
+- `scripts` - scripts used by the project, mainly the deployment scripts.
 
 ## How to use
 
@@ -161,4 +160,5 @@ The vesting contract has been created by TON Core team and audited by security c
 Feel free to review these reports for a detailed understanding of the contract's security measures.
 
 # License
+
 MIT
