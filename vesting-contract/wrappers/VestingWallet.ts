@@ -8,9 +8,9 @@ import {
   MessageRelaxed,
   Sender,
   SendMode,
-} from "ton-core";
-import { Maybe } from "ton/dist/utils/maybe";
-import { createWalletTransferV3 } from "ton/dist/wallets/signing/createWalletTransfer";
+} from "@ton/core";
+import { Maybe } from "@ton/core/dist/utils/maybe";
+import { createWalletTransferV3 } from "@ton/ton/dist/wallets/signing/createWalletTransfer";
 
 export type VestingWalletConfig = {
   subWalletId: number;
