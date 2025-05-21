@@ -129,11 +129,21 @@ async function main() {
     console.log('\n*** PERFORMING ACTUAL WITHDRAWAL ***');
     console.log(`Withdrawing ${Number(availableAmount) / 1e9} TON to ${walletAddress.toString()}`);
 
+    // Create the actual transfer message (this will be a reference in the main message)
+    const transferMessage = beginCell()
+      .storeUint(0x18, 6) // bounceable address
+      .storeAddress(walletAddress) // destination = wallet address
+      .storeCoins(availableAmount) // value = available amount
+      .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1) // default message header
+      .storeUint(0, 32) // empty op for simple transfer
+      .endCell();
+
+    // Create the main message with op::send and the required structure
     const withdrawBody = beginCell()
-      .storeUint(0x10, 32)
-      .storeUint(0, 64)
-      .storeCoins(availableAmount)
-      .storeAddress(walletAddress)
+      .storeUint(0xa7733acd, 32) // op::send opcode
+      .storeUint(0, 64) // query_id
+      .storeUint(1 + 2, 8) // send_mode = SEND_MODE_PAY_FEES_SEPARATELY + SEND_MODE_IGNORE_ERRORS
+      .storeRef(transferMessage) // message reference
       .endCell();
 
     const walletContract = client.open(wallet);
