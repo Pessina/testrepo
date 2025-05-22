@@ -307,55 +307,37 @@ export class VestingContract {
   /**
    * Retrieves the list of whitelisted addresses from the contract
    *
-   * Note on implementation approach:
+   * The contract's get_whitelist() method returns a tuple containing address pairs.
+   * Each pair is an array with [workchain, hash] where:
+   * - workchain: bigint (typically 0 for mainnet, -1 for masterchain)
+   * - hash: bigint representing the 256-bit account identifier
    *
-   * While the TON SDK typically prefers direct stack operations like:
-   * - stack.readTuple() to read a tuple
-   * - stack.readNumber() to read a number
-   * - stack.readBigNumber() to read a big number
-   * - stack.readAddress() to read an address
-   *
-   * In this specific case, we can't use those approaches because:
-   *
-   * 1. The FunC contract's `get_whitelist()` method returns data in a special format:
-   *    - It builds a linked list with `cons` and `null` (standard FunC list)
-   *    - The linked list contains pairs of (workchain, hash) created with `pair()`
-   *    - When serialized to the TVM stack, this becomes a nested tuple structure
-   *
-   * 2. Standard methods like readTuple().readNumber() don't work because:
-   *    - The structure isn't a simple tuple of primitives
-   *    - It's a tuple containing arrays, each with [workchain, hash] values
-   *    - Direct reading causes "Not a number" errors due to the nested structure
-   *
-   * 3. readLispList() can't be used because:
-   *    - This isn't a standard Lisp list structure expected by that method
-   *    - The FunC `list` type gets serialized differently when returned to clients
-   *
-   * Therefore, we use peek() to examine the raw structure without consuming it,
-   * then manually process the tuple.items array which contains the address components.
-   * This approach is reliable and works with the specific data structure returned by this contract.
+   * We iterate through the tuple using TupleReader's public API and safely
+   * parse each address pair, skipping any malformed entries.
    */
   async getWhitelistedAddresses(): Promise<Address[]> {
     const { stack } = await this.client.runMethod(this.address, 'get_whitelist');
+
+    if (stack.remaining === 0) {
+      return [];
+    }
+
+    const data = stack.readTuple();
     const addresses: Address[] = [];
 
-    // TON contracts often return list-like structures as tuples
-    if (stack.remaining > 0) {
-      const data = stack.peek();
-      stack.skip();
+    // Process each tuple item as [workchain, hash] pair
+    while (data.remaining > 0) {
+      const item = data.pop();
 
-      // Process as a tuple of [workchain, hash] pairs
-      if (data?.type === 'tuple' && Array.isArray(data.items)) {
-        // Transform each tuple item into an address
-        for (const item of data.items) {
-          if (Array.isArray(item) && item.length === 2) {
-            const wc = Number(item[0]);
-            const hash = BigInt(item[1]);
+      // Check if item is an array with exactly 2 elements
+      if (Array.isArray(item) && item.length === 2) {
+        const [workchain, hash] = item;
 
-            // Standard TON address construction
-            const hashHex = hash.toString(16).padStart(64, '0');
-            addresses.push(Address.parse(`${wc}:${hashHex}`));
-          }
+        if (typeof workchain === 'bigint' && typeof hash === 'bigint') {
+          const address = Address.parse(
+            `${Number(workchain)}:${hash.toString(16).padStart(64, '0')}`
+          );
+          addresses.push(address);
         }
       }
     }
