@@ -304,29 +304,60 @@ export class VestingContract {
     }
   }
 
+  /**
+   * Retrieves the list of whitelisted addresses from the contract
+   *
+   * Note on implementation approach:
+   *
+   * While the TON SDK typically prefers direct stack operations like:
+   * - stack.readTuple() to read a tuple
+   * - stack.readNumber() to read a number
+   * - stack.readBigNumber() to read a big number
+   * - stack.readAddress() to read an address
+   *
+   * In this specific case, we can't use those approaches because:
+   *
+   * 1. The FunC contract's `get_whitelist()` method returns data in a special format:
+   *    - It builds a linked list with `cons` and `null` (standard FunC list)
+   *    - The linked list contains pairs of (workchain, hash) created with `pair()`
+   *    - When serialized to the TVM stack, this becomes a nested tuple structure
+   *
+   * 2. Standard methods like readTuple().readNumber() don't work because:
+   *    - The structure isn't a simple tuple of primitives
+   *    - It's a tuple containing arrays, each with [workchain, hash] values
+   *    - Direct reading causes "Not a number" errors due to the nested structure
+   *
+   * 3. readLispList() can't be used because:
+   *    - This isn't a standard Lisp list structure expected by that method
+   *    - The FunC `list` type gets serialized differently when returned to clients
+   *
+   * Therefore, we use peek() to examine the raw structure without consuming it,
+   * then manually process the tuple.items array which contains the address components.
+   * This approach is reliable and works with the specific data structure returned by this contract.
+   */
   async getWhitelistedAddresses(): Promise<Address[]> {
     try {
-      const whitelistResult = await this.client.runMethod(this.address, 'get_whitelist');
+      // Call the get_whitelist method on the contract
+      const { stack } = await this.client.runMethod(this.address, 'get_whitelist');
       const addresses: Address[] = [];
 
-      if (whitelistResult.stack.remaining > 0) {
-        const stackItem = whitelistResult.stack.peek();
+      // TON contracts often return list-like structures as tuples
+      if (stack.remaining > 0) {
+        // Examine the data structure without consuming it yet
+        const data = stack.peek();
+        stack.skip(); // Consume the value
 
-        whitelistResult.stack.skip();
-
-        if (stackItem && stackItem.type === 'tuple' && Array.isArray(stackItem.items)) {
-          for (const item of stackItem.items) {
+        // Process as a tuple of [workchain, hash] pairs
+        if (data?.type === 'tuple' && Array.isArray(data.items)) {
+          // Transform each tuple item into an address
+          for (const item of data.items) {
             if (Array.isArray(item) && item.length === 2) {
-              try {
-                const wc = Number(item[0]);
-                const hash = BigInt(item[1]);
+              const wc = Number(item[0]);
+              const hash = BigInt(item[1]);
 
-                const hashHex = hash.toString(16).padStart(64, '0');
-                const address = Address.parse(`${wc}:${hashHex}`);
-                addresses.push(address);
-              } catch (e) {
-                console.error('Error parsing address:', e);
-              }
+              // Standard TON address construction
+              const hashHex = hash.toString(16).padStart(64, '0');
+              addresses.push(Address.parse(`${wc}:${hashHex}`));
             }
           }
         }
