@@ -73,21 +73,25 @@ export class VestingContract {
       `Withdrawing ${Number(withdrawAmount) / 1e9} TON from ${formatter.address(this.address)} to ${formatter.address(walletAddress)}`
     );
 
+    // 1. Authorization check
     const isOwner = this.wallet.address.toString() === contractState.ownerAddress.toString();
     const isVestingSender =
       this.wallet.address.toString() === contractState.vestingSenderAddress.toString();
+    const isWhitelisted = await this.isWhitelisted(walletAddress);
 
-    // TODO: Include the whitelisted addresses too
-    if (!isOwner && !isVestingSender) {
-      throw new Error('Error: Only the owner or vesting sender can initiate a withdrawal');
+    if (!isOwner) {
+      throw new Error('Error: Only the owner can initiate a withdrawal');
     }
 
-    if (withdrawAmount > contractState.balance) {
+    // 2. Balance sufficiency check with fee consideration
+    const txFee = toNano('0.05'); // Estimated transaction fee
+    if (withdrawAmount + txFee > contractState.balance) {
       throw new Error(
-        `Error: Requested amount (${Number(withdrawAmount) / 1e9} TON) exceeds contract balance (${Number(contractState.balance) / 1e9} TON)`
+        `Error: Requested amount (${Number(withdrawAmount) / 1e9} TON) plus fees exceeds contract balance (${Number(contractState.balance) / 1e9} TON)`
       );
     }
 
+    // 3. Locked amount check for owner
     const lockedAmount = contractState.lockedAmount;
     if (isOwner && !isVestingSender && withdrawAmount > contractState.balance - lockedAmount) {
       throw new Error(
@@ -95,7 +99,13 @@ export class VestingContract {
       );
     }
 
-    // Vesting sender can withdraw the entire balance
+    // 4. Valid destination address check
+    const isToVestingSender =
+      walletAddress.toString() === contractState.vestingSenderAddress.toString();
+    const isToOwner = walletAddress.toString() === contractState.ownerAddress.toString();
+    if (!isToVestingSender && !isToOwner && !isWhitelisted) {
+      throw new Error('Error: Invalid destination address');
+    }
 
     const walletContract = this.client.open(this.wallet);
     const seqno = await walletContract.getSeqno();
@@ -119,7 +129,7 @@ export class VestingContract {
 
     const vestingMessage = internal({
       to: this.address,
-      value: toNano('0.1'),
+      value: txFee,
       body: extractBody,
     });
 
@@ -131,6 +141,18 @@ export class VestingContract {
     });
 
     return seqno + 1;
+  }
+
+  async isWhitelisted(address: Address): Promise<boolean> {
+    try {
+      const result = await this.client.runMethod(this.address, 'is_whitelisted', [
+        { type: 'slice', cell: beginCell().storeAddress(address).endCell() },
+      ]);
+      return result.stack.readNumber() === -1;
+    } catch (error) {
+      console.error('Error checking whitelist status:', error);
+      return false;
+    }
   }
 
   async waitForBalanceChange(

@@ -13,39 +13,43 @@ async function main() {
       apiKey,
     });
 
-    const ownerWallet = getWallet({ keyPair, subwalletNumber: 1 });
-    const vestingSenderWallet = getWallet({ keyPair, subwalletNumber: 0 });
+    const ownerWallet = getWallet({ keyPair, subwalletNumber: 0 });
+    const receiverWallet = getWallet({ keyPair, subwalletNumber: 0 });
 
     console.log('\n=== Wallet Information ===');
     console.log(`Owner Wallet Address:      ${formatter.address(ownerWallet.address)}`);
-    console.log(`Vesting Sender Address:    ${formatter.address(vestingSenderWallet.address)}`);
+    console.log(`Receiver Wallet Address:   ${formatter.address(receiverWallet.address)}`);
     console.log('\n========================================');
 
     const vestingContract = new VestingContract(client, contractAddress, ownerWallet);
     const contractState = await vestingContract.getAllContractData();
     await vestingContract.logContractState(contractState);
 
-    const SAFETY_MARGIN = toNano('0.01');
+    const SAFETY_MARGIN = toNano('0.05');
 
-    // Calculate the amount to withdraw
-    // const withdrawAmount = Number(contractState.balance) - Number(contractState.lockedAmount);
-    const withdrawAmount = Number(contractState.balance) - Number(SAFETY_MARGIN);
+    const withdrawAmount = contractState.balance - SAFETY_MARGIN - contractState.lockedAmount;
 
-    await vestingContract.extractFunds(
-      keyPair,
-      vestingSenderWallet.address,
-      BigInt(withdrawAmount)
+    if (withdrawAmount <= 0) {
+      console.log('No funds available to withdraw');
+      return;
+    }
+
+    console.log(
+      `Attempting to withdraw ${Number(withdrawAmount) / 1e9} TON to ${formatter.address(receiverWallet.address)}`
     );
 
+    await vestingContract.extractFunds(keyPair, receiverWallet.address, withdrawAmount);
+
     const [isSuccess, newBalance] = await vestingContract.waitForBalanceChange(
-      contractState.balance,
-      withdrawAmount
+      contractState.balance
     );
 
     if (isSuccess) {
-      console.log(`Withdrawal successful. New balance: ${newBalance.toString()} nanoTON`);
+      console.log(`Withdrawal successful. New balance: ${Number(newBalance) / 1e9} TON`);
     } else {
-      console.error('Withdrawal failed.');
+      console.error(
+        'Withdrawal may have failed or is still processing. Please check the contract balance manually.'
+      );
     }
   } catch (error) {
     console.error('Error:', error);
