@@ -1,8 +1,9 @@
-import { toNano, TonClient } from '@ton/ton';
+import { TonClient } from '@ton/ton';
 import { getWallet } from '../utils/getWallet';
 import { getEnv } from '../utils/getEnv';
 import { VestingContract } from '../utils/VestingContract';
 import { formatter } from '../utils/formatter';
+import { SAFETY_MARGIN } from '../utils/constants';
 
 async function main() {
   const { contractAddress, apiKey, endpoint, keyPair } = await getEnv();
@@ -12,6 +13,17 @@ async function main() {
       endpoint,
       apiKey,
     });
+
+    /* 
+      Test:
+        - Owner -> Owner
+        - VestingSender -> VestingSender
+        - Owner -> VestingSender
+        - VestingSender -> Owner
+        - Owner -> Whitelisted address
+        - VestingSender -> Whitelisted address
+        - Internal/External message (External = Public Key)
+    */
 
     const ownerWallet = getWallet({ keyPair, subwalletNumber: 0 });
     const receiverWallet = getWallet({ keyPair, subwalletNumber: 0 });
@@ -24,8 +36,6 @@ async function main() {
     const vestingContract = new VestingContract(client, contractAddress, ownerWallet);
     const contractState = await vestingContract.getAllContractData();
     await vestingContract.logContractState(contractState);
-
-    const SAFETY_MARGIN = toNano('0.05');
 
     const withdrawAmount = contractState.balance - SAFETY_MARGIN - contractState.lockedAmount;
 

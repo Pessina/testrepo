@@ -1,8 +1,8 @@
-import { Address, toNano, beginCell } from '@ton/core';
+import { Address, beginCell } from '@ton/core';
 import { TonClient, internal, SendMode, WalletContractV5R1 } from '@ton/ton';
 import { KeyPair } from '@ton/crypto';
 import { formatter } from './formatter';
-
+import { SAFETY_MARGIN } from './constants';
 export interface VestingContractState {
   balance: bigint;
   state: string;
@@ -84,7 +84,7 @@ export class VestingContract {
     }
 
     // 2. Balance sufficiency check with fee consideration
-    const txFee = toNano('0.05'); // Estimated transaction fee
+    const txFee = SAFETY_MARGIN; // Estimated transaction fee
     if (withdrawAmount + txFee > contractState.balance) {
       throw new Error(
         `Error: Requested amount (${Number(withdrawAmount) / 1e9} TON) plus fees exceeds contract balance (${Number(contractState.balance) / 1e9} TON)`
