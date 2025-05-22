@@ -316,32 +316,37 @@ export class VestingContract {
    * parse each address pair, skipping any malformed entries.
    */
   async getWhitelistedAddresses(): Promise<Address[]> {
-    const { stack } = await this.client.runMethod(this.address, 'get_whitelist');
+    try {
+      const { stack } = await this.client.runMethod(this.address, 'get_whitelist');
 
-    if (stack.remaining === 0) {
-      return [];
-    }
+      if (stack.remaining === 0) {
+        return [];
+      }
 
-    const data = stack.readTuple();
-    const addresses: Address[] = [];
+      const data = stack.readTuple();
+      const addresses: Address[] = [];
 
-    // Process each tuple item as [workchain, hash] pair
-    while (data.remaining > 0) {
-      const item = data.pop();
+      // Process each tuple item as [workchain, hash] pair
+      while (data.remaining > 0) {
+        const item = data.pop();
 
-      // Check if item is an array with exactly 2 elements
-      if (Array.isArray(item) && item.length === 2) {
-        const [workchain, hash] = item;
+        // Check if item is an array with exactly 2 elements
+        if (Array.isArray(item) && item.length === 2) {
+          const [workchain, hash] = item;
 
-        if (typeof workchain === 'bigint' && typeof hash === 'bigint') {
-          const address = Address.parse(
-            `${Number(workchain)}:${hash.toString(16).padStart(64, '0')}`
-          );
-          addresses.push(address);
+          if (typeof workchain === 'bigint' && typeof hash === 'bigint') {
+            const address = Address.parse(
+              `${Number(workchain)}:${hash.toString(16).padStart(64, '0')}`
+            );
+            addresses.push(address);
+          }
         }
       }
-    }
 
-    return addresses;
+      return addresses;
+    } catch {
+      // Throw on reading tuple means that there are no whitelisted addresses
+      return [];
+    }
   }
 }
