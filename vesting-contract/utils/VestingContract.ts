@@ -310,16 +310,12 @@ export class VestingContract {
       const addresses: Address[] = [];
 
       if (whitelistResult.stack.remaining > 0) {
-        // In the specific case we're seeing, the whitelist is returned directly as a tuple
-        // with each item being a pair of [workchain, hash]
-        const tupleValue = whitelistResult.stack.peek();
-        whitelistResult.stack.skip(); // Consume the value
+        const stackItem = whitelistResult.stack.peek();
 
-        // Check if it's a tuple with items
-        if (tupleValue && tupleValue.type === 'tuple' && Array.isArray(tupleValue.items)) {
-          // Process each item in the tuple
-          for (const item of tupleValue.items) {
-            // Each item should be an array [workchain, hash]
+        whitelistResult.stack.skip();
+
+        if (stackItem && stackItem.type === 'tuple' && Array.isArray(stackItem.items)) {
+          for (const item of stackItem.items) {
             if (Array.isArray(item) && item.length === 2) {
               try {
                 const wc = Number(item[0]);
@@ -329,13 +325,10 @@ export class VestingContract {
                 const address = Address.parse(`${wc}:${hashHex}`);
                 addresses.push(address);
               } catch (e) {
-                console.error('Error parsing address from tuple item:', e);
+                console.error('Error parsing address:', e);
               }
             }
           }
-        } else {
-          // Fallback to the linked list processing for other cases
-          this.processLinkedList(tupleValue, addresses);
         }
       }
 
@@ -343,49 +336,6 @@ export class VestingContract {
     } catch (error) {
       console.error('Error getting whitelisted addresses:', error);
       return [];
-    }
-  }
-
-  /**
-   * Process a linked list returned from FunC (cons/null structure)
-   * @param node The current node in the linked list
-   * @param addresses Array to populate with addresses
-   */
-  private processLinkedList(node: any, addresses: Address[]): void {
-    try {
-      if (!node || node.type === 'null') {
-        // End of list
-        return;
-      }
-
-      if (node.type === 'tuple' && Array.isArray(node.items) && node.items.length === 2) {
-        // Each cons cell has two items:
-        // 1. The value (a pair of wc and hash)
-        // 2. The rest of the list (another cons cell or null)
-
-        const value = node.items[0];
-        const rest = node.items[1];
-
-        // Process the value (which should be a pair of wc and hash)
-        if (Array.isArray(value) && value.length === 2) {
-          try {
-            // value[0] is workchain, value[1] is address hash
-            const wc = Number(value[0]);
-            const hash = BigInt(value[1]);
-
-            const hashHex = hash.toString(16).padStart(64, '0');
-            const address = Address.parse(`${wc}:${hashHex}`);
-            addresses.push(address);
-          } catch (e) {
-            console.error('Error parsing address:', e);
-          }
-        }
-
-        // Process the rest of the list recursively
-        this.processLinkedList(rest, addresses);
-      }
-    } catch (e) {
-      console.error('Error in processLinkedList:', e);
     }
   }
 }
