@@ -336,37 +336,30 @@ export class VestingContract {
    * This approach is reliable and works with the specific data structure returned by this contract.
    */
   async getWhitelistedAddresses(): Promise<Address[]> {
-    try {
-      // Call the get_whitelist method on the contract
-      const { stack } = await this.client.runMethod(this.address, 'get_whitelist');
-      const addresses: Address[] = [];
+    const { stack } = await this.client.runMethod(this.address, 'get_whitelist');
+    const addresses: Address[] = [];
 
-      // TON contracts often return list-like structures as tuples
-      if (stack.remaining > 0) {
-        // Examine the data structure without consuming it yet
-        const data = stack.peek();
-        stack.skip(); // Consume the value
+    // TON contracts often return list-like structures as tuples
+    if (stack.remaining > 0) {
+      const data = stack.peek();
+      stack.skip();
 
-        // Process as a tuple of [workchain, hash] pairs
-        if (data?.type === 'tuple' && Array.isArray(data.items)) {
-          // Transform each tuple item into an address
-          for (const item of data.items) {
-            if (Array.isArray(item) && item.length === 2) {
-              const wc = Number(item[0]);
-              const hash = BigInt(item[1]);
+      // Process as a tuple of [workchain, hash] pairs
+      if (data?.type === 'tuple' && Array.isArray(data.items)) {
+        // Transform each tuple item into an address
+        for (const item of data.items) {
+          if (Array.isArray(item) && item.length === 2) {
+            const wc = Number(item[0]);
+            const hash = BigInt(item[1]);
 
-              // Standard TON address construction
-              const hashHex = hash.toString(16).padStart(64, '0');
-              addresses.push(Address.parse(`${wc}:${hashHex}`));
-            }
+            // Standard TON address construction
+            const hashHex = hash.toString(16).padStart(64, '0');
+            addresses.push(Address.parse(`${wc}:${hashHex}`));
           }
         }
       }
-
-      return addresses;
-    } catch (error) {
-      console.error('Error getting whitelisted addresses:', error);
-      return [];
     }
+
+    return addresses;
   }
 }
