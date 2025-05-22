@@ -8,8 +8,8 @@ export async function run(provider: NetworkProvider) {
   const { keyPair } = await getEnv();
   const publicKey = keyPair.publicKey.toString('hex');
 
-  const wallet = getWallet({ keyPair, subwalletNumber: 0 });
-  const wallet2 = getWallet({ keyPair, subwalletNumber: 1 });
+  const ownerWallet = getWallet({ keyPair, subwalletNumber: 0 });
+  const vestingSenderWallet = getWallet({ keyPair, subwalletNumber: 1 });
 
   const oneMinInSeconds = 60;
   const nowInSeconds = Math.floor(Date.now() / 1000);
@@ -24,8 +24,8 @@ export async function run(provider: NetworkProvider) {
         unlockPeriod: oneMinInSeconds,
         cliffDuration: 0,
         vestingTotalAmount: toNano('0.5'),
-        vestingSenderAddress: wallet.address,
-        ownerAddress: wallet2.address,
+        vestingSenderAddress: vestingSenderWallet.address,
+        ownerAddress: ownerWallet.address,
       },
       await compile('VestingWallet')
     )

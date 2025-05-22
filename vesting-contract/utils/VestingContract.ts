@@ -26,6 +26,7 @@ export class VestingContract {
     this.address = Address.parse(contractAddress);
     this.wallet = wallet;
   }
+
   async getAllContractData(): Promise<VestingContractState> {
     const contractState = await this.client.getContractState(this.address);
     if (!contractState.state || Number(contractState.balance) <= 0) {
@@ -65,6 +66,29 @@ export class VestingContract {
   }
 
   async extractFunds(keyPair: KeyPair, walletAddress: Address, withdrawAmount: bigint) {
+    const contractState = await this.getAllContractData();
+
+    console.log(`Withdrawing ${Number(withdrawAmount) / 1e9} TON from ${this.address.toString()}`);
+
+    if (this.wallet.address.toString() !== contractState.ownerAddress.toString()) {
+      throw new Error(
+        'Error: Your wallet address does not match the owner address of the vesting contract'
+      );
+    }
+
+    if (withdrawAmount > contractState.balance) {
+      throw new Error(
+        `Error: Requested amount (${Number(withdrawAmount) / 1e9} TON) exceeds contract balance (${Number(contractState.balance) / 1e9} TON)`
+      );
+    }
+
+    const lockedAmount = contractState.lockedAmount;
+    if (withdrawAmount > contractState.balance - lockedAmount) {
+      console.warn(
+        `Warning: Attempting to withdraw ${Number(withdrawAmount) / 1e9} TON, which includes ${Number(withdrawAmount - (contractState.balance - lockedAmount)) / 1e9} TON of locked funds`
+      );
+    }
+
     const walletContract = this.client.open(this.wallet);
     const seqno = await walletContract.getSeqno();
 
@@ -139,30 +163,36 @@ export class VestingContract {
 
   async logContractState(contractState: VestingContractState): Promise<void> {
     try {
-      console.log(`\nVesting Contract State:`);
-      console.log(`\nVesting Contract State:`);
-      console.log(`Address: ${this.address.toString()}`);
-      console.log(
-        `Balance: ${contractState.balance} nanoTON (${Number(contractState.balance) / 1e9} TON)`
-      );
+      // Contract basic information
+      console.log('\n=== Vesting Contract State ===');
+      console.log(`Address:       ${this.address.toString()}`);
       console.log(`Owner Address: ${contractState.ownerAddress.toString()}`);
-      console.log(`\nVesting Schedule Information:`);
+      console.log(`Vesting Sender Address: ${contractState.vestingSenderAddress.toString()}`);
       console.log(
-        `- Start Time: ${new Date(contractState.vestingStartTime * 1000).toLocaleString()}`
+        `Balance:       ${contractState.balance} nanoTON (${Number(contractState.balance) / 1e9} TON)`
       );
-      console.log(`- Total Duration: ${contractState.vestingTotalDuration / 60} minutes`);
-      console.log(`- Unlock Period: ${contractState.unlockPeriod / 60} minutes`);
-      console.log(`- Cliff Duration: ${contractState.cliffDuration / 60} minutes`);
-      console.log(`- Total Amount: ${Number(contractState.vestingTotalAmount) / 1e9} TON`);
+
+      // Vesting schedule parameters
+      console.log('\n=== Vesting Schedule Parameters ===');
       console.log(
-        `- Locked Amount: ${contractState.lockedAmount} nanoTON (${Number(contractState.lockedAmount) / 1e9} TON)`
+        `Start Time:     ${new Date(contractState.vestingStartTime * 1000).toLocaleString()}`
+      );
+      console.log(`Total Duration: ${contractState.vestingTotalDuration / 60} minutes`);
+      console.log(`Unlock Period:  ${contractState.unlockPeriod / 60} minutes`);
+      console.log(`Cliff Duration: ${contractState.cliffDuration / 60} minutes`);
+
+      // Financial information
+      console.log('\n=== Token Allocation ===');
+      console.log(`Total Amount:      ${Number(contractState.vestingTotalAmount) / 1e9} TON`);
+      console.log(`Locked Amount:     ${Number(contractState.lockedAmount) / 1e9} TON`);
+      console.log(
+        `Available Amount:  ${Number(contractState.vestingTotalAmount - contractState.lockedAmount) / 1e9} TON`
       );
       console.log(
-        `- Available Amount: ${contractState.vestingTotalAmount - contractState.lockedAmount} nanoTON (${Number(contractState.vestingTotalAmount - contractState.lockedAmount) / 1e9} TON)`
+        `Withdrawable:      ${Number(contractState.balance - contractState.lockedAmount) / 1e9} TON`
       );
-      console.log(
-        `- Withdrawable Amount: ${contractState.balance - contractState.lockedAmount} nanoTON (${Number(contractState.balance - contractState.lockedAmount) / 1e9} TON)`
-      );
+
+      console.log(`\n========================================\n`);
     } catch (error) {
       console.error('Error logging contract state:', error);
     }
