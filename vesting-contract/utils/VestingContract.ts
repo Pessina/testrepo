@@ -1,6 +1,7 @@
 import { Address, toNano, beginCell } from '@ton/core';
 import { TonClient, internal, SendMode, WalletContractV5R1 } from '@ton/ton';
 import { KeyPair } from '@ton/crypto';
+import { formatter } from './formatter';
 
 export interface VestingContractState {
   balance: bigint;
@@ -68,12 +69,17 @@ export class VestingContract {
   async extractFunds(keyPair: KeyPair, walletAddress: Address, withdrawAmount: bigint) {
     const contractState = await this.getAllContractData();
 
-    console.log(`Withdrawing ${Number(withdrawAmount) / 1e9} TON from ${this.address.toString()}`);
+    console.log(
+      `Withdrawing ${Number(withdrawAmount) / 1e9} TON from ${formatter.address(this.address)} to ${formatter.address(walletAddress)}`
+    );
 
-    if (this.wallet.address.toString() !== contractState.ownerAddress.toString()) {
-      throw new Error(
-        'Error: Your wallet address does not match the owner address of the vesting contract'
-      );
+    const isOwner = this.wallet.address.toString() === contractState.ownerAddress.toString();
+    const isVestingSender =
+      this.wallet.address.toString() === contractState.vestingSenderAddress.toString();
+
+    // TODO: Include the whitelisted addresses too
+    if (!isOwner && !isVestingSender) {
+      throw new Error('Error: Only the owner or vesting sender can initiate a withdrawal');
     }
 
     if (withdrawAmount > contractState.balance) {
@@ -83,11 +89,13 @@ export class VestingContract {
     }
 
     const lockedAmount = contractState.lockedAmount;
-    if (withdrawAmount > contractState.balance - lockedAmount) {
-      console.warn(
-        `Warning: Attempting to withdraw ${Number(withdrawAmount) / 1e9} TON, which includes ${Number(withdrawAmount - (contractState.balance - lockedAmount)) / 1e9} TON of locked funds`
+    if (isOwner && !isVestingSender && withdrawAmount > contractState.balance - lockedAmount) {
+      throw new Error(
+        `Error: Owner can only withdraw unlocked funds. Maximum available: ${Number(contractState.balance - lockedAmount) / 1e9} TON`
       );
     }
+
+    // Vesting sender can withdraw the entire balance
 
     const walletContract = this.client.open(this.wallet);
     const seqno = await walletContract.getSeqno();
@@ -163,16 +171,16 @@ export class VestingContract {
 
   async logContractState(contractState: VestingContractState): Promise<void> {
     try {
-      // Contract basic information
       console.log('\n=== Vesting Contract State ===');
-      console.log(`Address:       ${this.address.toString()}`);
-      console.log(`Owner Address: ${contractState.ownerAddress.toString()}`);
-      console.log(`Vesting Sender Address: ${contractState.vestingSenderAddress.toString()}`);
+      console.log(`Address:       ${formatter.address(this.address)}`);
+      console.log(`Owner Address: ${formatter.address(contractState.ownerAddress)}`);
+      console.log(
+        `Vesting Sender Address: ${formatter.address(contractState.vestingSenderAddress)}`
+      );
       console.log(
         `Balance:       ${contractState.balance} nanoTON (${Number(contractState.balance) / 1e9} TON)`
       );
 
-      // Vesting schedule parameters
       console.log('\n=== Vesting Schedule Parameters ===');
       console.log(
         `Start Time:     ${new Date(contractState.vestingStartTime * 1000).toLocaleString()}`
@@ -181,7 +189,6 @@ export class VestingContract {
       console.log(`Unlock Period:  ${contractState.unlockPeriod / 60} minutes`);
       console.log(`Cliff Duration: ${contractState.cliffDuration / 60} minutes`);
 
-      // Financial information
       console.log('\n=== Token Allocation ===');
       console.log(`Total Amount:      ${Number(contractState.vestingTotalAmount) / 1e9} TON`);
       console.log(`Locked Amount:     ${Number(contractState.lockedAmount) / 1e9} TON`);

@@ -2,6 +2,7 @@ import { toNano, TonClient } from '@ton/ton';
 import { getWallet } from '../utils/getWallet';
 import { getEnv } from '../utils/getEnv';
 import { VestingContract } from '../utils/VestingContract';
+import { formatter } from '../utils/formatter';
 
 async function main() {
   const { contractAddress, apiKey, endpoint, keyPair } = await getEnv();
@@ -16,21 +17,9 @@ async function main() {
     const vestingSenderWallet = getWallet({ keyPair, subwalletNumber: 0 });
 
     console.log('\n=== Wallet Information ===');
-    console.log(
-      `Owner Wallet Address:      ${ownerWallet.address.toString({
-        testOnly: false,
-        bounceable: true,
-        urlSafe: true,
-      })}`
-    );
-    console.log(
-      `Vesting Sender Address:    ${vestingSenderWallet.address.toString({
-        testOnly: false,
-        bounceable: true,
-        urlSafe: true,
-      })}`
-    );
-    console.log('========================================\n');
+    console.log(`Owner Wallet Address:      ${formatter.address(ownerWallet.address)}`);
+    console.log(`Vesting Sender Address:    ${formatter.address(vestingSenderWallet.address)}`);
+    console.log('\n========================================');
 
     const vestingContract = new VestingContract(client, contractAddress, ownerWallet);
     const contractState = await vestingContract.getAllContractData();
