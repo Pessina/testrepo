@@ -15,6 +15,7 @@ export interface VestingContractState {
   ownerAddress: Address;
   lockedAmount: bigint;
   currentTime: number;
+  whitelistedAddresses: Address[];
 }
 
 export class VestingContract {
@@ -51,6 +52,8 @@ export class VestingContract {
     ]);
     const lockedAmount = lockedAmountResult.stack.readBigNumber();
 
+    const whitelistedAddresses = await this.getWhitelistedAddresses();
+
     return {
       balance: BigInt(contractState.balance),
       state: contractState.state,
@@ -63,6 +66,7 @@ export class VestingContract {
       ownerAddress,
       lockedAmount,
       currentTime,
+      whitelistedAddresses,
     };
   }
 
@@ -137,6 +141,69 @@ export class VestingContract {
       seqno,
       secretKey: keyPair.secretKey,
       messages: [vestingMessage],
+      sendMode: SendMode.PAY_GAS_SEPARATELY,
+    });
+
+    return seqno + 1;
+  }
+
+  /**
+   * Adds one or more addresses to the contract's whitelist
+   * Only the vesting sender can add addresses to the whitelist
+   * @param keyPair KeyPair of the vesting sender
+   * @param addresses Array of addresses to whitelist
+   * @returns The new seqno
+   */
+  async addWhitelistedAddresses(keyPair: KeyPair, addresses: Address[]) {
+    const contractState = await this.getAllContractData();
+
+    const isVestingSender =
+      this.wallet.address.toString() === contractState.vestingSenderAddress.toString();
+
+    if (!isVestingSender) {
+      throw new Error('Only the vesting sender can add addresses to the whitelist');
+    }
+
+    if (addresses.length === 0) {
+      throw new Error('No addresses provided to whitelist');
+    }
+
+    console.log(`Adding ${addresses.length} address(es) to the whitelist`);
+    addresses.forEach(addr => {
+      console.log(`- ${formatter.address(addr)}`);
+    });
+
+    // Create the message body with all addresses
+    // First address goes directly in the message body, additional ones in refs
+    let body = beginCell()
+      .storeUint(0x7258a69b, 32) // op::add_whitelist opcode
+      .storeUint(0, 64) // query_id
+      .storeAddress(addresses[0]);
+
+    // Add remaining addresses in a chain of refs if there are more than one
+    if (addresses.length > 1) {
+      let currentCell = beginCell();
+
+      for (let i = 1; i < addresses.length; i++) {
+        currentCell = currentCell.storeAddress(addresses[i]);
+      }
+
+      body = body.storeRef(currentCell.asCell());
+    }
+
+    const walletContract = this.client.open(this.wallet);
+    const seqno = await walletContract.getSeqno();
+
+    const whitelistMessage = internal({
+      to: this.address,
+      value: SAFETY_MARGIN,
+      body: body.endCell(),
+    });
+
+    await walletContract.sendTransfer({
+      seqno,
+      secretKey: keyPair.secretKey,
+      messages: [whitelistMessage],
       sendMode: SendMode.PAY_GAS_SEPARATELY,
     });
 
@@ -221,9 +288,104 @@ export class VestingContract {
         `Withdrawable:      ${Number(contractState.balance - contractState.lockedAmount) / 1e9} TON`
       );
 
+      // Log whitelisted addresses
+      console.log('\n=== Whitelisted Addresses ===');
+      if (contractState.whitelistedAddresses.length === 0) {
+        console.log('No whitelisted addresses found');
+      } else {
+        contractState.whitelistedAddresses.forEach((address, index) => {
+          console.log(`${index + 1}. ${formatter.address(address)}`);
+        });
+      }
+
       console.log(`\n========================================\n`);
     } catch (error) {
       console.error('Error logging contract state:', error);
+    }
+  }
+
+  async getWhitelistedAddresses(): Promise<Address[]> {
+    try {
+      const whitelistResult = await this.client.runMethod(this.address, 'get_whitelist');
+      const addresses: Address[] = [];
+
+      if (whitelistResult.stack.remaining > 0) {
+        // In the specific case we're seeing, the whitelist is returned directly as a tuple
+        // with each item being a pair of [workchain, hash]
+        const tupleValue = whitelistResult.stack.peek();
+        whitelistResult.stack.skip(); // Consume the value
+
+        // Check if it's a tuple with items
+        if (tupleValue && tupleValue.type === 'tuple' && Array.isArray(tupleValue.items)) {
+          // Process each item in the tuple
+          for (const item of tupleValue.items) {
+            // Each item should be an array [workchain, hash]
+            if (Array.isArray(item) && item.length === 2) {
+              try {
+                const wc = Number(item[0]);
+                const hash = BigInt(item[1]);
+
+                const hashHex = hash.toString(16).padStart(64, '0');
+                const address = Address.parse(`${wc}:${hashHex}`);
+                addresses.push(address);
+              } catch (e) {
+                console.error('Error parsing address from tuple item:', e);
+              }
+            }
+          }
+        } else {
+          // Fallback to the linked list processing for other cases
+          this.processLinkedList(tupleValue, addresses);
+        }
+      }
+
+      return addresses;
+    } catch (error) {
+      console.error('Error getting whitelisted addresses:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Process a linked list returned from FunC (cons/null structure)
+   * @param node The current node in the linked list
+   * @param addresses Array to populate with addresses
+   */
+  private processLinkedList(node: any, addresses: Address[]): void {
+    try {
+      if (!node || node.type === 'null') {
+        // End of list
+        return;
+      }
+
+      if (node.type === 'tuple' && Array.isArray(node.items) && node.items.length === 2) {
+        // Each cons cell has two items:
+        // 1. The value (a pair of wc and hash)
+        // 2. The rest of the list (another cons cell or null)
+
+        const value = node.items[0];
+        const rest = node.items[1];
+
+        // Process the value (which should be a pair of wc and hash)
+        if (Array.isArray(value) && value.length === 2) {
+          try {
+            // value[0] is workchain, value[1] is address hash
+            const wc = Number(value[0]);
+            const hash = BigInt(value[1]);
+
+            const hashHex = hash.toString(16).padStart(64, '0');
+            const address = Address.parse(`${wc}:${hashHex}`);
+            addresses.push(address);
+          } catch (e) {
+            console.error('Error parsing address:', e);
+          }
+        }
+
+        // Process the rest of the list recursively
+        this.processLinkedList(rest, addresses);
+      }
+    } catch (e) {
+      console.error('Error in processLinkedList:', e);
     }
   }
 }
