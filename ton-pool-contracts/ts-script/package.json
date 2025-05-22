@@ -1,0 +1,21 @@
+{
+  "name": "ton-nominators-checker",
+  "version": "1.0.0",
+  "description": "Script to check TON Nominators Pool balance",
+  "type": "module",
+  "main": "check-stake.ts",
+  "scripts": {
+    "start": "bun check-stake.ts",
+    "check": "bun check-stake.ts"
+  },
+  "dependencies": {
+    "@ton/core": "^0.60.1",
+    "@ton/crypto": "^3.3.0",
+    "@ton/ton": "^15.2.1",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.5",
+    "bun-types": "latest"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@ton-community/func-js": "^0.8.0"
+  }
+}
