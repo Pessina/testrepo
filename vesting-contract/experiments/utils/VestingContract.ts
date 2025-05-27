@@ -3,6 +3,14 @@ import { TonClient, internal, SendMode, WalletContractV5R1 } from '@ton/ton';
 import { KeyPair } from '@ton/crypto';
 import { formatter } from './formatter';
 import { SAFETY_MARGIN } from './constants';
+import {
+  STAKING_OPS,
+  SEND_MODES,
+  STAKING_FEES,
+  MESSAGE_FLAGS,
+  VALIDATION_SETTINGS,
+} from './StakingConstants';
+
 export interface VestingContractState {
   balance: bigint;
   state: string;
@@ -18,6 +26,15 @@ export interface VestingContractState {
   whitelistedAddresses: Address[];
 }
 
+/**
+ * Enhanced VestingContract class with staking capabilities
+ *
+ * This class provides comprehensive functionality for:
+ * - Basic vesting contract operations (withdraw, whitelist management)
+ * - Staking operations via whitelisted pools
+ * - Text command and binary operation support
+ * - Transaction monitoring and validation
+ */
 export class VestingContract {
   private client: TonClient;
   private address: Address;
@@ -29,6 +46,9 @@ export class VestingContract {
     this.wallet = wallet;
   }
 
+  /**
+   * Retrieves comprehensive contract state including vesting parameters and balances
+   */
   async getAllContractData(): Promise<VestingContractState> {
     const contractState = await this.client.getContractState(this.address);
     if (!contractState.state || Number(contractState.balance) <= 0) {
@@ -70,14 +90,203 @@ export class VestingContract {
     };
   }
 
-  async extractFunds(keyPair: KeyPair, walletAddress: Address, withdrawAmount: bigint) {
+  /**
+   * Stakes tokens to a whitelisted staking pool using text command format
+   *
+   * Obs: Vesting contract doesn't allow the op_code for staking, so we have to use text command. See: https://github.com/ChorusOne/ton-pool-contracts/blob/fa98fb53556bad6f03db2adf84476a16502de6bf/vesting.fc#L241
+   *
+   * @param keyPair - Key pair for signing the transaction
+   * @param stakingPoolAddress - Address of the whitelisted staking pool
+   * @param stakeAmount - Amount to stake in nanoTON
+   * @param queryId - Optional query ID for tracking (default: current timestamp)
+   * @returns Transaction sequence number
+   *
+   * @throws Error if validation fails or transaction cannot be sent
+   */
+  async stakeToPool(
+    keyPair: KeyPair,
+    stakingPoolAddress: Address,
+    stakeAmount: bigint,
+    queryId?: bigint
+  ): Promise<number> {
+    // Validate preconditions
+    await this.validateStakingPreconditions(stakingPoolAddress, stakeAmount);
+
+    const actualQueryId = queryId ?? BigInt(Date.now());
+
+    console.log(
+      `🎯 Staking ${Number(stakeAmount) / 1e9} TON to pool ${formatter.address(stakingPoolAddress)}`
+    );
+
+    // Create text command message body for "Deposit"
+    const stakingMessageBody = beginCell()
+      .storeUint(STAKING_OPS.TEXT_COMMAND, 32) // 0 = text command
+      .storeUint(STAKING_OPS.DEPOSIT_FIRST_CHAR, 8) // 'D' = 68
+      .storeUint(STAKING_OPS.DEPOSIT_REMAINING, 48) // 'eposit' = 111533580577140
+      .endCell();
+
+    // Calculate total value needed (stake + fees)
+    const totalStakingValue = stakeAmount + STAKING_FEES.RECEIPT_FEE + STAKING_FEES.DEPOSIT_FEE;
+
+    // Build message to staking pool
+    const stakingMessage = beginCell()
+      .storeUint(MESSAGE_FLAGS.BOUNCEABLE, 6) // Bounceable required for whitelisted addresses
+      .storeAddress(stakingPoolAddress)
+      .storeCoins(totalStakingValue)
+      .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1) // Standard message flags
+      .storeUint(1, 1) // Has body reference
+      .storeRef(stakingMessageBody)
+      .endCell();
+
+    // Build vesting contract message
+    const vestingMessageBody = beginCell()
+      .storeUint(STAKING_OPS.SEND, 32) // op::send
+      .storeUint(actualQueryId, 64)
+      .storeUint(SEND_MODES.IGNORE_ERRORS_PAY_FEES_SEPARATELY, 8) // Required mode = 3
+      .storeRef(stakingMessage)
+      .endCell();
+
+    // Send transaction
+    const walletContract = this.client.open(this.wallet);
+    const seqno = await walletContract.getSeqno();
+
+    const vestingMessage = internal({
+      to: this.address,
+      value: totalStakingValue + STAKING_FEES.VESTING_OP_FEE,
+      body: vestingMessageBody,
+    });
+
+    await walletContract.sendTransfer({
+      seqno,
+      secretKey: keyPair.secretKey,
+      messages: [vestingMessage],
+      sendMode: SendMode.PAY_GAS_SEPARATELY,
+    });
+
+    console.log(`✅ Staking transaction sent with query ID: ${actualQueryId}`);
+    console.log(
+      `📊 Total value: ${Number(totalStakingValue + STAKING_FEES.VESTING_OP_FEE) / 1e9} TON`
+    );
+
+    return seqno + 1;
+  }
+
+  /**
+   * Validates all preconditions for staking operations
+   *
+   * @private
+   * @param stakingPoolAddress - Target staking pool address
+   * @param stakeAmount - Amount to stake
+   * @throws Error if any validation fails
+   */
+  private async validateStakingPreconditions(
+    stakingPoolAddress: Address,
+    stakeAmount: bigint
+  ): Promise<void> {
+    const contractState = await this.getAllContractData();
+
+    // Check if pool is whitelisted
+    const isWhitelisted = await this.isWhitelisted(stakingPoolAddress);
+    if (!isWhitelisted) {
+      throw new Error(
+        'Security error: Staking pool address is not whitelisted. ' +
+          'Add it to the whitelist first using the vesting sender address.'
+      );
+    }
+
+    // Check sufficient balance
+    const totalRequired = stakeAmount + STAKING_FEES.TOTAL + SAFETY_MARGIN;
+    if (contractState.balance < totalRequired) {
+      throw new Error(
+        `Insufficient balance. Required: ${Number(totalRequired) / 1e9} TON, ` +
+          `Available: ${Number(contractState.balance) / 1e9} TON`
+      );
+    }
+
+    // Validate minimum stake
+    if (stakeAmount < 1_000_000_000n) {
+      // 1 TON minimum
+      throw new Error(
+        `Stake amount (${Number(stakeAmount) / 1e9} TON) below minimum required (1 TON)`
+      );
+    }
+  }
+
+  /**
+   * Monitors staking transaction by waiting for balance change
+   *
+   * @param initialBalance - Balance before the transaction
+   * @param maxAttempts - Maximum number of attempts to check
+   * @param initialDelay - Initial delay between checks in milliseconds
+   * @returns Promise resolving to [success, newBalance]
+   */
+  async waitForStakingResult(
+    initialBalance: bigint,
+    maxAttempts: number = VALIDATION_SETTINGS.MAX_WAIT_ATTEMPTS,
+    initialDelay: number = VALIDATION_SETTINGS.INITIAL_DELAY_MS
+  ): Promise<[boolean, bigint]> {
+    let attempts = 0;
+    let delay = initialDelay;
+
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    while (attempts < maxAttempts) {
+      try {
+        await sleep(delay);
+        attempts++;
+
+        const state = await this.getAllContractData();
+        const currentBalance = state.balance;
+
+        if (currentBalance !== initialBalance) {
+          const difference = initialBalance - currentBalance;
+          console.log(`🎉 Balance changed! Difference: ${Number(difference) / 1e9} TON`);
+          return [true, currentBalance];
+        }
+
+        delay = Math.min(
+          delay * VALIDATION_SETTINGS.BACKOFF_MULTIPLIER,
+          VALIDATION_SETTINGS.MAX_DELAY_MS
+        );
+        console.log(`⏳ Attempt ${attempts}/${maxAttempts} - No balance change yet...`);
+      } catch (error) {
+        console.log(`⚠️ Error checking balance on attempt ${attempts}: ${error}`);
+      }
+    }
+
+    try {
+      const finalState = await this.getAllContractData();
+      return [false, finalState.balance];
+    } catch (error) {
+      console.log('❌ Failed to get final balance');
+      return [false, initialBalance];
+    }
+  }
+
+  // ============================================================================
+  // Existing methods (unchanged but with improved comments)
+  // ============================================================================
+
+  /**
+   * Extracts funds from the vesting contract to a specified address
+   *
+   * @param keyPair - Key pair for signing the transaction
+   * @param walletAddress - Destination address for the funds
+   * @param withdrawAmount - Amount to withdraw in nanoTON
+   * @returns New sequence number
+   */
+  async extractFunds(
+    keyPair: KeyPair,
+    walletAddress: Address,
+    withdrawAmount: bigint
+  ): Promise<number> {
     const contractState = await this.getAllContractData();
 
     console.log(
       `Withdrawing ${Number(withdrawAmount) / 1e9} TON from ${formatter.address(this.address)} to ${formatter.address(walletAddress)}`
     );
 
-    // 1. Authorization check
+    // Authorization and validation checks
     const isOwner = this.wallet.address.toString() === contractState.ownerAddress.toString();
     const isVestingSender =
       this.wallet.address.toString() === contractState.vestingSenderAddress.toString();
@@ -87,15 +296,13 @@ export class VestingContract {
       throw new Error('Error: Only the owner can initiate a withdrawal');
     }
 
-    // 2. Balance sufficiency check with fee consideration
-    const txFee = SAFETY_MARGIN; // Estimated transaction fee
+    const txFee = SAFETY_MARGIN;
     if (withdrawAmount + txFee > contractState.balance) {
       throw new Error(
         `Error: Requested amount (${Number(withdrawAmount) / 1e9} TON) plus fees exceeds contract balance (${Number(contractState.balance) / 1e9} TON)`
       );
     }
 
-    // 3. Locked amount check for owner
     const lockedAmount = contractState.lockedAmount;
     if (isOwner && !isVestingSender && withdrawAmount > contractState.balance - lockedAmount) {
       throw new Error(
@@ -103,7 +310,6 @@ export class VestingContract {
       );
     }
 
-    // 4. Valid destination address check
     const isToVestingSender =
       walletAddress.toString() === contractState.vestingSenderAddress.toString();
     const isToOwner = walletAddress.toString() === contractState.ownerAddress.toString();
@@ -114,21 +320,19 @@ export class VestingContract {
     const walletContract = this.client.open(this.wallet);
     const seqno = await walletContract.getSeqno();
 
-    // Create the transfer message with exact amount
     const transferMessage = beginCell()
-      .storeUint(0x18, 6) // bounceable address flag
-      .storeAddress(walletAddress) // destination = wallet address
-      .storeCoins(withdrawAmount) // value = exact amount to withdraw
-      .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1) // default message header
-      .storeUint(0, 32) // empty op for simple transfer
+      .storeUint(0x18, 6)
+      .storeAddress(walletAddress)
+      .storeCoins(withdrawAmount)
+      .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+      .storeUint(0, 32)
       .endCell();
 
-    // According to contract, we MUST use SEND_MODE_IGNORE_ERRORS(2) + SEND_MODE_PAY_FEES_SEPARETELY(1) = 3
     const extractBody = beginCell()
-      .storeUint(0xa7733acd, 32) // op::send opcode
-      .storeUint(0, 64) // query_id
-      .storeUint(1 + 2, 8) // send_mode = SEND_MODE_PAY_FEES_SEPARATELY + SEND_MODE_IGNORE_ERRORS = 3
-      .storeRef(transferMessage) // message reference
+      .storeUint(STAKING_OPS.SEND, 32) // Using constant
+      .storeUint(0, 64)
+      .storeUint(SEND_MODES.IGNORE_ERRORS_PAY_FEES_SEPARATELY, 8) // Using constant
+      .storeRef(transferMessage)
       .endCell();
 
     const vestingMessage = internal({
@@ -148,13 +352,9 @@ export class VestingContract {
   }
 
   /**
-   * Adds one or more addresses to the contract's whitelist
-   * Only the vesting sender can add addresses to the whitelist
-   * @param keyPair KeyPair of the vesting sender
-   * @param addresses Array of addresses to whitelist
-   * @returns The new seqno
+   * Adds addresses to the contract's whitelist (only vesting sender can do this)
    */
-  async addWhitelistedAddresses(keyPair: KeyPair, addresses: Address[]) {
+  async addWhitelistedAddresses(keyPair: KeyPair, addresses: Address[]): Promise<number> {
     const contractState = await this.getAllContractData();
 
     const isVestingSender =
@@ -173,21 +373,16 @@ export class VestingContract {
       console.log(`- ${formatter.address(addr)}`);
     });
 
-    // Create the message body with all addresses
-    // First address goes directly in the message body, additional ones in refs
     let body = beginCell()
-      .storeUint(0x7258a69b, 32) // op::add_whitelist opcode
-      .storeUint(0, 64) // query_id
+      .storeUint(0x7258a69b, 32) // op::add_whitelist
+      .storeUint(0, 64)
       .storeAddress(addresses[0]);
 
-    // Add remaining addresses in a chain of refs if there are more than one
     if (addresses.length > 1) {
       let currentCell = beginCell();
-
       for (let i = 1; i < addresses.length; i++) {
         currentCell = currentCell.storeAddress(addresses[i]);
       }
-
       body = body.storeRef(currentCell.asCell());
     }
 
@@ -210,6 +405,9 @@ export class VestingContract {
     return seqno + 1;
   }
 
+  /**
+   * Checks if an address is whitelisted
+   */
   async isWhitelisted(address: Address): Promise<boolean> {
     try {
       const result = await this.client.runMethod(this.address, 'is_whitelisted', [
@@ -222,42 +420,20 @@ export class VestingContract {
     }
   }
 
+  /**
+   * Waits for balance change with configurable retry logic
+   */
   async waitForBalanceChange(
     initialBalance: bigint,
-    maxAttempts = 10,
-    initialDelay = 3000
+    maxAttempts = VALIDATION_SETTINGS.MAX_WAIT_ATTEMPTS,
+    initialDelay = VALIDATION_SETTINGS.INITIAL_DELAY_MS
   ): Promise<[boolean, bigint]> {
-    let attempts = 0;
-    let delay = initialDelay;
-
-    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-    while (attempts < maxAttempts) {
-      try {
-        await sleep(delay);
-        attempts++;
-
-        const state = await this.getAllContractData();
-        const currentBalance = state.balance;
-
-        if (currentBalance !== initialBalance) {
-          return [true, currentBalance];
-        }
-
-        delay = Math.min(delay * 1.5, 10000);
-      } catch (error) {
-        console.log(`Error checking contract state on attempt ${attempts}: ${error}`);
-      }
-    }
-
-    try {
-      const finalState = await this.getAllContractData();
-      return [false, finalState.balance];
-    } catch (error) {
-      return [false, initialBalance];
-    }
+    return this.waitForStakingResult(initialBalance, maxAttempts, initialDelay);
   }
 
+  /**
+   * Logs comprehensive contract state information
+   */
   async logContractState(contractState: VestingContractState): Promise<void> {
     try {
       console.log('\n=== Vesting Contract State ===');
@@ -288,7 +464,6 @@ export class VestingContract {
         `Withdrawable:      ${Number(contractState.balance - contractState.lockedAmount) / 1e9} TON`
       );
 
-      // Log whitelisted addresses
       console.log('\n=== Whitelisted Addresses ===');
       if (contractState.whitelistedAddresses.length === 0) {
         console.log('No whitelisted addresses found');
@@ -305,15 +480,7 @@ export class VestingContract {
   }
 
   /**
-   * Retrieves the list of whitelisted addresses from the contract
-   *
-   * The contract's get_whitelist() method returns a tuple containing address pairs.
-   * Each pair is an array with [workchain, hash] where:
-   * - workchain: bigint (typically 0 for mainnet, -1 for masterchain)
-   * - hash: bigint representing the 256-bit account identifier
-   *
-   * We iterate through the tuple using TupleReader's public API and safely
-   * parse each address pair, skipping any malformed entries.
+   * Retrieves whitelisted addresses from the contract
    */
   async getWhitelistedAddresses(): Promise<Address[]> {
     try {
@@ -326,11 +493,9 @@ export class VestingContract {
       const data = stack.readTuple();
       const addresses: Address[] = [];
 
-      // Process each tuple item as [workchain, hash] pair
       while (data.remaining > 0) {
         const item = data.pop();
 
-        // Check if item is an array with exactly 2 elements
         if (Array.isArray(item) && item.length === 2) {
           const [workchain, hash] = item;
 
@@ -345,8 +510,21 @@ export class VestingContract {
 
       return addresses;
     } catch {
-      // Throw on reading tuple means that there are no whitelisted addresses
       return [];
     }
+  }
+
+  /**
+   * Gets the contract address
+   */
+  get contractAddress(): Address {
+    return this.address;
+  }
+
+  /**
+   * Gets the wallet instance
+   */
+  get walletInstance(): WalletContractV5R1 {
+    return this.wallet;
   }
 }
