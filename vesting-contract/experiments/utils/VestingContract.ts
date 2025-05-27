@@ -189,7 +189,7 @@ export class VestingContract {
     queryId?: bigint
   ): Promise<number> {
     // Validate preconditions
-    await this.validateUnstakingPreconditions(stakingPoolAddress);
+    await this.validateUnstakingPreconditions(stakingPoolAddress, unstakeAmount);
 
     const actualQueryId = queryId ?? BigInt(Date.now());
 
@@ -264,7 +264,33 @@ export class VestingContract {
   ): Promise<void> {
     const contractState = await this.getAllContractData();
 
-    // Check if pool is whitelisted
+    // 1. Owner authorization check
+    const isOwner = this.wallet.address.toString() === contractState.ownerAddress.toString();
+    if (!isOwner) {
+      throw new Error(
+        `Access denied: Wallet address (${this.wallet.address.toString()}) ` +
+          `does not match vesting contract owner (${contractState.ownerAddress.toString()})`
+      );
+    }
+
+    // 2. Validate stake amount
+    if (stakeAmount <= 0n) {
+      throw new Error('Stake amount must be greater than 0');
+    }
+
+    // 3. Validate minimum stake (1 TON minimum)
+    if (stakeAmount < 1_000_000_000n) {
+      throw new Error(
+        `Stake amount (${Number(stakeAmount) / 1e9} TON) below minimum required (1 TON)`
+      );
+    }
+
+    // 4. Validate staking pool address
+    if (!stakingPoolAddress) {
+      throw new Error('Staking pool address is required');
+    }
+
+    // 5. Check if pool is whitelisted
     const isWhitelisted = await this.isWhitelisted(stakingPoolAddress);
     if (!isWhitelisted) {
       throw new Error(
@@ -273,7 +299,7 @@ export class VestingContract {
       );
     }
 
-    // Check sufficient balance
+    // 6. Check sufficient balance for stake + fees
     const totalRequired = stakeAmount + STAKING_FEES.TOTAL + SAFETY_MARGIN;
     if (contractState.balance < totalRequired) {
       throw new Error(
@@ -282,13 +308,19 @@ export class VestingContract {
       );
     }
 
-    // Validate minimum stake
-    if (stakeAmount < 1_000_000_000n) {
-      // 1 TON minimum
-      throw new Error(
-        `Stake amount (${Number(stakeAmount) / 1e9} TON) below minimum required (1 TON)`
-      );
+    // 7. Warn about locked tokens usage (but allow it for whitelisted pools)
+    if (contractState.lockedAmount > 0) {
+      const availableUnlocked = contractState.balance - contractState.lockedAmount;
+      if (stakeAmount > availableUnlocked) {
+        const lockedInStake = stakeAmount - availableUnlocked;
+        console.log(
+          `⚠️ Using ${Number(lockedInStake) / 1e9} TON of locked tokens ` +
+            '(allowed for whitelisted staking pools)'
+        );
+      }
     }
+
+    console.log('✅ All staking validations passed');
   }
 
   /**
@@ -296,12 +328,35 @@ export class VestingContract {
    *
    * @private
    * @param stakingPoolAddress - Target staking pool address
+   * @param unstakeAmount - Amount to unstake (0 = withdraw all)
    * @throws Error if any validation fails
    */
-  private async validateUnstakingPreconditions(stakingPoolAddress: Address): Promise<void> {
+  private async validateUnstakingPreconditions(
+    stakingPoolAddress: Address,
+    unstakeAmount: bigint
+  ): Promise<void> {
     const contractState = await this.getAllContractData();
 
-    // Check if pool is whitelisted
+    // 1. Owner authorization check
+    const isOwner = this.wallet.address.toString() === contractState.ownerAddress.toString();
+    if (!isOwner) {
+      throw new Error(
+        `Access denied: Wallet address (${this.wallet.address.toString()}) ` +
+          `does not match vesting contract owner (${contractState.ownerAddress.toString()})`
+      );
+    }
+
+    // 2. Validate unstake amount
+    if (unstakeAmount < 0n) {
+      throw new Error('Unstake amount cannot be negative');
+    }
+
+    // 3. Validate staking pool address
+    if (!stakingPoolAddress) {
+      throw new Error('Staking pool address is required');
+    }
+
+    // 4. Check if pool is whitelisted
     const isWhitelisted = await this.isWhitelisted(stakingPoolAddress);
     if (!isWhitelisted) {
       throw new Error(
@@ -310,7 +365,7 @@ export class VestingContract {
       );
     }
 
-    // Check sufficient balance for fees
+    // 5. Check sufficient balance for unstaking fees
     const totalRequired = STAKING_FEES.WITHDRAW_TOTAL + SAFETY_MARGIN;
     if (contractState.balance < totalRequired) {
       throw new Error(
@@ -318,6 +373,15 @@ export class VestingContract {
           `Available: ${Number(contractState.balance) / 1e9} TON`
       );
     }
+
+    // 6. Log unstake amount info
+    if (unstakeAmount === 0n) {
+      console.log('💰 Unstaking ALL tokens from the pool');
+    } else {
+      console.log(`💰 Unstaking ${Number(unstakeAmount) / 1e9} TON from the pool`);
+    }
+
+    console.log('✅ All unstaking validations passed');
   }
 
   /**

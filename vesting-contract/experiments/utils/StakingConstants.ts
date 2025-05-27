@@ -13,6 +13,10 @@ export const STAKING_OPS = {
   DEPOSIT_REMAINING: 111533580577140, // 'eposit' as uint48
   WITHDRAW_FIRST_CHAR: 87, // 'W' as uint8
   WITHDRAW_REMAINING: 29682864265257335n, // 'ithdraw' as uint56
+
+  // Binary operations (alternative to text commands)
+  STAKE_DEPOSIT: 2077040623, // op::stake_deposit()
+  STAKE_WITHDRAW: 3665837821, // op::stake_withdraw()
 } as const;
 
 /**
