@@ -11,9 +11,12 @@ export const STAKING_OPS = {
   TEXT_COMMAND: 0, // Text commands start with 0
   DEPOSIT_FIRST_CHAR: 68, // 'D' as uint8
   DEPOSIT_REMAINING: 111533580577140, // 'eposit' as uint48
+  WITHDRAW_FIRST_CHAR: 87, // 'W' as uint8
+  WITHDRAW_REMAINING: 29682864265257335n, // 'ithdraw' as uint56
 
   // Binary operations (alternative to text commands)
   STAKE_DEPOSIT: 2077040623, // op::stake_deposit()
+  STAKE_WITHDRAW: 3665837821, // op::stake_withdraw()
 } as const;
 
 /**
@@ -42,6 +45,11 @@ export const STAKING_FEES = {
   // Total recommended minimum
   get TOTAL() {
     return this.RECEIPT_FEE + this.DEPOSIT_FEE + this.GAS_FEE + this.VESTING_OP_FEE;
+  },
+
+  // Total for withdraw operations
+  get WITHDRAW_TOTAL() {
+    return this.RECEIPT_FEE + this.WITHDRAW_FEE + this.GAS_FEE + this.VESTING_OP_FEE;
   },
 } as const;
 

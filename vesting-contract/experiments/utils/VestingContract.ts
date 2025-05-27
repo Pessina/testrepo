@@ -172,6 +172,85 @@ export class VestingContract {
   }
 
   /**
+   * Unstakes tokens from a whitelisted staking pool using text command format
+   *
+   * @param keyPair - Key pair for signing the transaction
+   * @param stakingPoolAddress - Address of the whitelisted staking pool
+   * @param unstakeAmount - Amount to unstake in nanoTON (0 = withdraw all)
+   * @param queryId - Optional query ID for tracking (default: current timestamp)
+   * @returns Transaction sequence number
+   *
+   * @throws Error if validation fails or transaction cannot be sent
+   */
+  async unstakeFromPool(
+    keyPair: KeyPair,
+    stakingPoolAddress: Address,
+    unstakeAmount: bigint = 0n,
+    queryId?: bigint
+  ): Promise<number> {
+    // Validate preconditions
+    await this.validateUnstakingPreconditions(stakingPoolAddress);
+
+    const actualQueryId = queryId ?? BigInt(Date.now());
+
+    console.log(
+      `🎯 Unstaking ${unstakeAmount === 0n ? 'ALL' : `${Number(unstakeAmount) / 1e9} TON`} from pool ${formatter.address(stakingPoolAddress)}`
+    );
+
+    // Create text command message body for "Withdraw"
+    const unstakingMessageBody = beginCell()
+      .storeUint(STAKING_OPS.TEXT_COMMAND, 32) // 0 = text command
+      .storeUint(STAKING_OPS.WITHDRAW_FIRST_CHAR, 8) // 'W' = 87
+      .storeUint(STAKING_OPS.WITHDRAW_REMAINING, 56) // 'ithdraw' = 29682864265257335
+      .endCell();
+
+    // Calculate total value needed (fees only, no unstake amount needed)
+    const totalUnstakingValue = STAKING_FEES.RECEIPT_FEE + STAKING_FEES.WITHDRAW_FEE;
+
+    // Build message to staking pool
+    const unstakingMessage = beginCell()
+      .storeUint(MESSAGE_FLAGS.BOUNCEABLE, 6) // Bounceable required for whitelisted addresses
+      .storeAddress(stakingPoolAddress)
+      .storeCoins(totalUnstakingValue)
+      .storeUint(0, 1 + 4 + 4 + 64 + 32 + 1) // Standard message flags
+      .storeUint(1, 1) // Has body reference
+      .storeRef(unstakingMessageBody)
+      .endCell();
+
+    // Build vesting contract message
+    const vestingMessageBody = beginCell()
+      .storeUint(STAKING_OPS.SEND, 32) // op::send
+      .storeUint(actualQueryId, 64)
+      .storeUint(SEND_MODES.IGNORE_ERRORS_PAY_FEES_SEPARATELY, 8) // Required mode = 3
+      .storeRef(unstakingMessage)
+      .endCell();
+
+    // Send transaction
+    const walletContract = this.client.open(this.wallet);
+    const seqno = await walletContract.getSeqno();
+
+    const vestingMessage = internal({
+      to: this.address,
+      value: totalUnstakingValue + STAKING_FEES.VESTING_OP_FEE,
+      body: vestingMessageBody,
+    });
+
+    await walletContract.sendTransfer({
+      seqno,
+      secretKey: keyPair.secretKey,
+      messages: [vestingMessage],
+      sendMode: SendMode.PAY_GAS_SEPARATELY,
+    });
+
+    console.log(`✅ Unstaking transaction sent with query ID: ${actualQueryId}`);
+    console.log(
+      `📊 Total value: ${Number(totalUnstakingValue + STAKING_FEES.VESTING_OP_FEE) / 1e9} TON`
+    );
+
+    return seqno + 1;
+  }
+
+  /**
    * Validates all preconditions for staking operations
    *
    * @private
@@ -208,6 +287,35 @@ export class VestingContract {
       // 1 TON minimum
       throw new Error(
         `Stake amount (${Number(stakeAmount) / 1e9} TON) below minimum required (1 TON)`
+      );
+    }
+  }
+
+  /**
+   * Validates all preconditions for unstaking operations
+   *
+   * @private
+   * @param stakingPoolAddress - Target staking pool address
+   * @throws Error if any validation fails
+   */
+  private async validateUnstakingPreconditions(stakingPoolAddress: Address): Promise<void> {
+    const contractState = await this.getAllContractData();
+
+    // Check if pool is whitelisted
+    const isWhitelisted = await this.isWhitelisted(stakingPoolAddress);
+    if (!isWhitelisted) {
+      throw new Error(
+        'Security error: Staking pool address is not whitelisted. ' +
+          'Cannot unstake from non-whitelisted pools.'
+      );
+    }
+
+    // Check sufficient balance for fees
+    const totalRequired = STAKING_FEES.WITHDRAW_TOTAL + SAFETY_MARGIN;
+    if (contractState.balance < totalRequired) {
+      throw new Error(
+        `Insufficient balance for unstaking fees. Required: ${Number(totalRequired) / 1e9} TON, ` +
+          `Available: ${Number(contractState.balance) / 1e9} TON`
       );
     }
   }
@@ -260,6 +368,63 @@ export class VestingContract {
     } catch (error) {
       console.log('❌ Failed to get final balance');
       return [false, initialBalance];
+    }
+  }
+
+  /**
+   * Monitors unstaking transaction by waiting for balance increase
+   *
+   * @param initialBalance - Balance before the unstaking transaction
+   * @param maxAttempts - Maximum number of attempts to check
+   * @param initialDelay - Initial delay between checks in milliseconds
+   * @returns Promise resolving to [success, newBalance, receivedAmount]
+   */
+  async waitForUnstakingResult(
+    initialBalance: bigint,
+    maxAttempts: number = VALIDATION_SETTINGS.MAX_WAIT_ATTEMPTS,
+    initialDelay: number = VALIDATION_SETTINGS.INITIAL_DELAY_MS
+  ): Promise<[boolean, bigint, bigint]> {
+    let attempts = 0;
+    let delay = initialDelay;
+
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    while (attempts < maxAttempts) {
+      try {
+        await sleep(delay);
+        attempts++;
+
+        const state = await this.getAllContractData();
+        const currentBalance = state.balance;
+
+        if (currentBalance !== initialBalance) {
+          const difference = currentBalance - initialBalance;
+          if (difference > 0) {
+            console.log(`🎉 Unstaking successful! Received: ${Number(difference) / 1e9} TON`);
+            return [true, currentBalance, difference];
+          } else {
+            console.log(`⚠️ Balance decreased by ${Number(-difference) / 1e9} TON (fees paid)`);
+            return [false, currentBalance, 0n];
+          }
+        }
+
+        delay = Math.min(
+          delay * VALIDATION_SETTINGS.BACKOFF_MULTIPLIER,
+          VALIDATION_SETTINGS.MAX_DELAY_MS
+        );
+        console.log(`⏳ Attempt ${attempts}/${maxAttempts} - No balance change yet...`);
+      } catch (error) {
+        console.log(`⚠️ Error checking balance on attempt ${attempts}: ${error}`);
+      }
+    }
+
+    try {
+      const finalState = await this.getAllContractData();
+      const difference = finalState.balance - initialBalance;
+      return [false, finalState.balance, difference > 0 ? difference : 0n];
+    } catch (error) {
+      console.log('❌ Failed to get final balance');
+      return [false, initialBalance, 0n];
     }
   }
 
