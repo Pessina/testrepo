@@ -1,9 +1,9 @@
 import { TonClient } from '@ton/ton';
-import { getWallet } from '../utils/getWallet';
-import { getEnv } from '../utils/getEnv';
-import { VestingContract } from '../utils/VestingContract';
-import { formatter } from '../utils/formatter';
-import { SAFETY_MARGIN } from '../utils/constants';
+import { getWallet } from './utils/getWallet';
+import { getEnv } from './utils/getEnv';
+import { VestingContract } from './utils/VestingContract';
+import { formatter } from './utils/formatter';
+import { SAFETY_MARGIN } from './utils/constants';
 
 async function main() {
   const { contractAddress, apiKey, endpoint, keyPair } = await getEnv();

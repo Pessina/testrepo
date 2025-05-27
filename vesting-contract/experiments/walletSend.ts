@@ -1,7 +1,7 @@
 import { toNano } from '@ton/core';
 import { TonClient, internal, SendMode } from '@ton/ton';
-import { getWallet } from '../utils/getWallet';
-import { getEnv } from '../utils/getEnv';
+import { getWallet } from './utils/getWallet';
+import { getEnv } from './utils/getEnv';
 
 async function main() {
   const { apiKey, endpoint, keyPair } = await getEnv();

@@ -1,8 +1,8 @@
 import { toNano } from '@ton/core';
 import { VestingWallet } from '../wrappers/VestingWallet';
 import { compile, NetworkProvider } from '@ton/blueprint';
-import { getEnv } from '../utils/getEnv';
-import { getWallet } from '../utils/getWallet';
+import { getEnv } from '../experiments/utils/getEnv';
+import { getWallet } from '../experiments/utils/getWallet';
 
 export async function run(provider: NetworkProvider) {
   const { keyPair } = await getEnv();
