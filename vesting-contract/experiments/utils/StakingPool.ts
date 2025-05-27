@@ -109,41 +109,7 @@ export class StakingPool {
    */
   async getTotalMemberAmount(memberAddress: Address): Promise<bigint> {
     const status = await this.getMemberStatus(memberAddress);
-    return status.balance + status.pendingDeposit + status.pendingWithdraw + status.withdrawReady;
-  }
-
-  /**
-   * Estimates daily earnings for a given stake amount
-   *
-   * @param stakeAmount - Amount staked in nanoTON
-   * @param annualAPY - Annual percentage yield (default: 3%)
-   * @returns Estimated daily earnings in TON
-   */
-  estimateDailyEarnings(stakeAmount: bigint, annualAPY: number = 0.03): number {
-    const stakeInTon = Number(stakeAmount) / 1e9;
-    return stakeInTon * (annualAPY / 365);
-  }
-
-  /**
-   * Formats time remaining in a validation cycle
-   *
-   * @param stakeUntil - End timestamp of the validation cycle
-   * @returns Formatted time string (e.g., "2h 30m")
-   */
-  formatTimeRemaining(stakeUntil: number): string {
-    const now = Math.floor(Date.now() / 1000);
-    const remaining = Math.max(0, stakeUntil - now);
-
-    const hours = Math.floor(remaining / 3600);
-    const minutes = Math.floor((remaining % 3600) / 60);
-
-    if (hours > 0) {
-      return `${hours}h ${minutes}m`;
-    } else if (minutes > 0) {
-      return `${minutes}m`;
-    } else {
-      return 'Less than 1 minute';
-    }
+    return status.balance + status.pendingDeposit + status.withdrawReady;
   }
 
   /**
