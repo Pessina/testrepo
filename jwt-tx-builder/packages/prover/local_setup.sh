@@ -3,9 +3,11 @@ set -e # Stop on error
 
 mkdir -p build
 mkdir -p params
+# python3 -m venv venv && source venv/bin/activate
 source venv/bin/activate
 npm install -g snarkjs@latest
-pip install -r requirements.txt
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
 cd params
 curl https://storage.googleapis.com/zk-jwt-params/jwt-verifier.zkey --output ./jwt-verifier.zkey
 curl https://storage.googleapis.com/zk-jwt-params/jwt-verifier_js/jwt-verifier.wasm --output ./jwt-verifier.wasm
