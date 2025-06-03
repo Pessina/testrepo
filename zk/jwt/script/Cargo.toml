@@ -1,16 +1,18 @@
 [package]
 version = "0.1.0"
-name = "rsa-script"
+name = "jwt-script"
 edition = "2021"
-default-run = "rsa"
+default-run = "jwt"
 
 [[bin]]
-name = "rsa"
+name = "jwt"
 path = "src/bin/main.rs"
 
 [dependencies]
 sp1-sdk = "5.0.0"
-rsa = "0.6"
+rsa = "0.9.8"
+num-bigint = "0.4.3"
+base64 = "0.22.1"
 
 [build-dependencies]
 sp1-build = "5.0.0"
