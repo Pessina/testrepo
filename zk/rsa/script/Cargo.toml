@@ -1,8 +1,8 @@
 [package]
 version = "0.1.0"
-name = "fibonacci-script"
+name = "rsa-script"
 edition = "2021"
-default-run = "fibonacci"
+default-run = "rsa"
 
 [[bin]]
 name = "fibonacci"
