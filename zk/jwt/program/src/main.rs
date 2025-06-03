@@ -2,7 +2,7 @@
 sp1_zkvm::entrypoint!(main);
 
 use base64::{engine::general_purpose, Engine as _};
-use rsa::{pkcs1::DecodeRsaPublicKey, Pkcs1v15Sign, RsaPublicKey};
+use rsa::{pkcs8::DecodePublicKey, Pkcs1v15Sign, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -81,7 +81,7 @@ pub fn main() {
     let jwt_token = sp1_zkvm::io::read::<String>();
 
     let public_key =
-        RsaPublicKey::from_pkcs1_der(&public_key_der).expect("Failed to parse public key");
+        RsaPublicKey::from_public_key_der(&public_key_der).expect("Failed to parse public key");
 
     let email = verify_jwt(&jwt_token, &public_key).expect("JWT verification failed");
 
