@@ -6,7 +6,7 @@ use solana_sdk::{
     signer::Signer,
     transaction::Transaction,
 };
-use sp1_sdk::{include_elf, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1Stdin};
+use sp1_sdk::{include_elf, HashableKey, ProverClient, SP1Stdin};
 
 #[derive(clap::Parser)]
 #[command(name = "zkVM Proof Generator")]
