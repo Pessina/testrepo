@@ -1,5 +1,5 @@
 use rsa::{pkcs8::EncodePublicKey, BigUint, RsaPublicKey};
-use sp1_sdk::{include_elf, utils, ProverClient, SP1ProofWithPublicValues, SP1Stdin};
+use sp1_sdk::{include_elf, utils, HashableKey, ProverClient, SP1Stdin};
 
 /// The ELF we want to execute inside the zkVM.
 const RSA_ELF: &[u8] = include_elf!("jwt-program");
@@ -34,40 +34,35 @@ fn main() {
     stdin.write(&rsa_public_key.to_public_key_der().unwrap().to_vec());
     stdin.write(&token);
 
-    // Instead of generating and verifying the proof each time while developing,
-    // execute the program with the RISC-V runtime and read stdout.
-    //
-    // let mut stdout = SP1Prover::execute(REGEX_IO_ELF, stdin).expect("proving failed");
-    // let verified = stdout.read::<bool>();
-
     // Generate the proof for the given program and input.
     let client = ProverClient::from_env();
     let (pk, vk) = client.setup(RSA_ELF);
-    let proof = client.prove(&pk, &stdin).run().expect("proving failed");
-    // Verify proof.
-    client.verify(&proof, &vk).expect("verification failed");
+    let proof = client
+        .prove(&pk, &stdin)
+        .groth16()
+        .run()
+        .expect("proving failed");
 
-    // Test a round trip of proof serialization and deserialization.
-    proof.save("proof-with-pis").expect("saving proof failed");
-    let deserialized_proof =
-        SP1ProofWithPublicValues::load("proof-with-pis").expect("loading proof failed");
+    println!("Proof bytes: {:?}", proof.bytes().len());
+    println!("Verifying key: {:?}", vk.bytes32());
 
     // Verify the deserialized proof.
-    client
-        .verify(&deserialized_proof, &vk)
-        .expect("verification failed");
+    client.verify(&proof, &vk).expect("verification failed");
 
     let mut public_values = proof.public_values.clone();
 
     // The program commits two values:
     // 1. The public key hash (32 bytes)
-    // 2. The email string
+    // 2. The email hash (32 bytes)
+    // 3. The nonce
     let pk_hash = public_values.read::<Vec<u8>>();
-    let email = public_values.read::<String>();
+    let email_hash = public_values.read::<Vec<u8>>();
+    let nonce = public_values.read::<String>();
 
     println!("Public outputs from the proof:");
     println!("Public key hash: {:?}", pk_hash);
-    println!("Email: {}", email);
+    println!("Email hash: {:?}", email_hash);
+    println!("Nonce: {}", nonce);
 
     println!("successfully generated and verified proof for the program!")
 }
