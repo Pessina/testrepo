@@ -1,0 +1,16 @@
+[package]
+version = "0.1.0"
+name = "rsa-script"
+edition = "2021"
+default-run = "rsa"
+
+[[bin]]
+name = "rsa"
+path = "src/bin/main.rs"
+
+[dependencies]
+sp1-sdk = "5.0.0"
+rsa = "0.6"
+
+[build-dependencies]
+sp1-build = "5.0.0"
