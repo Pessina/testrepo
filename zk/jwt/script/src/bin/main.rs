@@ -57,5 +57,17 @@ fn main() {
         .verify(&deserialized_proof, &vk)
         .expect("verification failed");
 
+    let mut public_values = proof.public_values.clone();
+
+    // The program commits two values:
+    // 1. The public key hash (32 bytes)
+    // 2. The email string
+    let pk_hash = public_values.read::<Vec<u8>>();
+    let email = public_values.read::<String>();
+
+    println!("Public outputs from the proof:");
+    println!("Public key hash: {:?}", pk_hash);
+    println!("Email: {}", email);
+
     println!("successfully generated and verified proof for the program!")
 }
