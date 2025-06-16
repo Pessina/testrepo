@@ -74,7 +74,7 @@ async function fetchAndDecodeEvents() {
     
     // Get recent transaction signatures for the program
     const signatures = await connection.getSignaturesForAddress(programId, {
-      limit: 50 // Get last 50 transactions
+      limit: 10 // Get last 50 transactions
     });
     
     console.log(`📋 Found ${signatures.length} recent transactions\n`);
