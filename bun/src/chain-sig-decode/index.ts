@@ -1,6 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Buffer } from "buffer";
 import idl from "./idl.json";
+import { BorshInstructionCoder } from "@coral-xyz/anchor";
 
 const connection = new anchor.web3.Connection("https://devnet.helius-rpc.com/?api-key=b8c41cbe-c859-4b0b-8c2b-b62c12cfe1de");
 const provider = new anchor.AnchorProvider(connection, {} as any, {});
@@ -72,10 +73,12 @@ async function fetchAndDecodeEvents() {
     console.log(`🔍 Fetching recent events for program: ${programId.toBase58()}`);
     console.log("⏳ This may take a moment...\n");
     
-    // Get recent transaction signatures for the program
-    const signatures = await connection.getSignaturesForAddress(programId, {
-      limit: 10 // Get last 50 transactions
-    });
+    // // Get recent transaction signatures for the program
+    // const signatures = await connection.getSignaturesForAddress(programId, {
+    //   limit: 10 // Get last 50 transactions
+    // });
+
+    const signatures = [{signature: "2xajhiDTMc6g2KXeVQhP6spWuwFSf8nhsjDSb8PFzdSJktyaHnkcvtxsLwWdrJLXSod2WUgVctSNtnHZpw2dua74"}]
     
     console.log(`📋 Found ${signatures.length} recent transactions\n`);
     
@@ -91,7 +94,7 @@ async function fetchAndDecodeEvents() {
       
       try {
         // Get the transaction details
-        const transaction = await connection.getTransaction(signatureInfo.signature as string, {
+        const transaction = await connection.getParsedTransaction(signatureInfo.signature as string, {
           maxSupportedTransactionVersion: 0
         });
         
@@ -101,39 +104,70 @@ async function fetchAndDecodeEvents() {
         
         // Look for program logs that contain events
         const logs = transaction.meta.logMessages;
-        const programLogs = logs.filter(log => 
-          log.includes("Program data:") || 
-          log.includes("Program log:")
-        );
-        
-        // Process each program log
-        for (const log of programLogs) {
-          if (log.includes("Program data:")) {
+        const innerInstructions = transaction.meta.innerInstructions;
+        const coder = new BorshInstructionCoder(program.idl);
+
+        innerInstructions?.forEach(innerInstruction => {
+          innerInstruction.instructions.forEach(instruction => {
+
             try {
-              // Extract base64 data from log
-              const dataMatch = log.match(/Program data: (.+)/);
-              if (dataMatch) {
-                const base64Data = dataMatch[1];
-                const decodedEvent = program.coder.events.decode(base64Data);
-                
-                if (decodedEvent) {
-                  eventCount++;
-                  console.log(`📅 Transaction: ${signatureInfo.signature}`);
-                  console.log(`🕐 Block Time: ${new Date((signatureInfo.blockTime || 0) * 1000).toISOString()}`);
-                  formatEventData(decodedEvent);
+              // Check if this instruction is for our program
+              if (instruction.programId.toBase58() === programId.toBase58()) {
+                if ("data" in instruction) {
+                // Decode the instruction data
+                const decodedInstruction = coder.decode(instruction.data, 'base58');
+
+                if (decodedInstruction) {
+                  console.log(`🔧 Instruction: ${decodedInstruction.name}`);
+                  console.log(`📊 Data:`, decodedInstruction.data);
+                  console.log("---");
+                }
                 }
               }
             } catch (decodeError) {
-              // Skip logs that can't be decoded as events
-              continue;
+              // Skip instructions that can't be decoded
+              console.log("Raw instruction:", instruction);
             }
-          }
-        }
+          });
+        });
+
+        // logs.forEach(log => {
+        //   console.log(log);
+        // });
+
+        // const programLogs = logs.filter(log => 
+        //   log.includes("Program data:") || 
+        //   log.includes("Program log:")
+        // );
         
-        // Add a small delay to avoid rate limiting
-        if (i % 10 === 0 && i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
+        // // Process each program log
+        // for (const log of programLogs) {
+        //   if (log.includes("Program data:")) {
+        //     try {
+        //       // Extract base64 data from log
+        //       const dataMatch = log.match(/Program data: (.+)/);
+        //       if (dataMatch) {
+        //         const base64Data = dataMatch[1];
+        //         const decodedEvent = program.coder.events.decode(base64Data);
+                
+        //         if (decodedEvent) {
+        //           eventCount++;
+        //           console.log(`📅 Transaction: ${signatureInfo.signature}`);
+        //           console.log(`🕐 Block Time: ${new Date((signatureInfo.blockTime || 0) * 1000).toISOString()}`);
+        //           formatEventData(decodedEvent);
+        //         }
+        //       }
+        //     } catch (decodeError) {
+        //       // Skip logs that can't be decoded as events
+        //       continue;
+        //     }
+        //   }
+        // }
+        
+        // // Add a small delay to avoid rate limiting
+        // if (i % 10 === 0 && i > 0) {
+        //   await new Promise(resolve => setTimeout(resolve, 100));
+        // }
         
       } catch (error) {
         console.error(`Error processing transaction ${signatureInfo.signature}:`, error);
