@@ -21,7 +21,6 @@ pub struct CustomEvent {
 
 type Result<T> = anyhow::Result<T>;
 
-/// Security-focused CPI event parser that validates program ownership and event discriminators
 async fn parse_cpi_events(
     rpc_client: &RpcClient,
     signature: &Signature,
@@ -31,7 +30,7 @@ async fn parse_cpi_events(
         .get_transaction_with_config(
             signature,
             solana_client::rpc_config::RpcTransactionConfig {
-                encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+                encoding: Some(solana_transaction_status::UiTransactionEncoding::JsonParsed),
                 commitment: Some(CommitmentConfig::confirmed()),
                 max_supported_transaction_version: Some(0),
             },
@@ -42,85 +41,83 @@ async fn parse_cpi_events(
         return Ok(Vec::new());
     };
 
+    let target_program_str = target_program_id.to_string();
+    let mut events = Vec::new();
+
+    let process_instruction_data = |data: &str| -> Result<Vec<CustomEvent>> {
+        let Ok(ix_data) = bs58::decode(data).into_vec() else {
+            log::warn!("Failed to decode instruction data for target program");
+            return Ok(Vec::new());
+        };
+
+        // Validate minimum length for event data
+        // Format: [8 bytes instruction discriminator][8 bytes event discriminator][event data]
+        if ix_data.len() < 16 {
+            log::debug!(
+                "Instruction data too short to contain event: {} bytes",
+                ix_data.len()
+            );
+            return Ok(Vec::new());
+        }
+
+        // Extract event discriminator and data
+        let event_discriminator = &ix_data[8..16];
+        let event_data = &ix_data[16..];
+
+        // Validate event discriminator matches our CustomEvent
+        if event_discriminator != CustomEvent::DISCRIMINATOR {
+            log::debug!("Event discriminator mismatch - not our event type");
+            return Ok(Vec::new());
+        }
+
+        // Safely deserialize with error handling
+        match CustomEvent::deserialize(&mut &event_data[..]) {
+            Ok(event) => Ok(vec![event]),
+            Err(e) => {
+                log::warn!(
+                    "Failed to deserialize event data from target program: {}",
+                    e
+                );
+                Ok(Vec::new())
+            }
+        }
+    };
+
+    // Then check inner instructions for CPI calls
     let inner_ixs = match meta.inner_instructions {
         solana_transaction_status::option_serializer::OptionSerializer::Some(ixs) => ixs,
         _ => return Ok(Vec::new()),
     };
 
-    let account_keys = match &tx.transaction.transaction {
-        solana_transaction_status::EncodedTransaction::Json(ui_tx) => match &ui_tx.message {
-            solana_transaction_status::UiMessage::Raw(raw) => &raw.account_keys,
-            _ => {
-                log::warn!("Transaction encoding not supported for security validation");
-                return Ok(Vec::new());
-            }
-        },
-        _ => {
-            log::warn!("Transaction format not supported for security validation");
-            return Ok(Vec::new());
-        }
-    };
-
-    let target_program_str = target_program_id.to_string();
-    let mut events = Vec::new();
-
     for (set_idx, inner_ix_set) in inner_ixs.iter().enumerate() {
         for (ix_idx, instruction) in inner_ix_set.instructions.iter().enumerate() {
-            if let solana_transaction_status::UiInstruction::Compiled(compiled_ix) = instruction {
-                // Validate that the CPI is calling our target program
-                let Some(program_key) = account_keys.get(compiled_ix.program_id_index as usize)
-                else {
-                    log::warn!(
-                        "Invalid program_id_index in inner instruction {}.{}",
-                        set_idx,
-                        ix_idx
-                    );
-                    continue;
-                };
-
-                // Only process CPIs that target our specific program
-                if program_key != &target_program_str {
-                    continue;
-                }
-
-                let Ok(ix_data) = bs58::decode(&compiled_ix.data).into_vec() else {
-                    log::warn!("Failed to decode instruction data for target program CPI");
-                    continue;
-                };
-
-                // Validate minimum length for event data
-                // Format: [8 bytes instruction discriminator][8 bytes event discriminator][event data]
-                if ix_data.len() < 16 {
-                    log::debug!(
-                        "Instruction data too short to contain event: {} bytes",
-                        ix_data.len()
-                    );
-                    continue;
-                }
-
-                // Extract event discriminator and data
-                let event_discriminator = &ix_data[8..16];
-                let event_data = &ix_data[16..];
-
-                // Validate event discriminator matches our CustomEvent
-                if event_discriminator != CustomEvent::DISCRIMINATOR {
-                    log::debug!("Event discriminator mismatch - not our event type");
-                    continue;
-                }
-
-                // Safely deserialize with error handling
-                match CustomEvent::deserialize(&mut &event_data[..]) {
-                    Ok(event) => {
-                        events.push(event);
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to deserialize event data from target program: {}",
-                            e
-                        );
-                        continue;
+            match instruction {
+                solana_transaction_status::UiInstruction::Parsed(parsed_ix) => {
+                    match parsed_ix {
+                        solana_transaction_status::UiParsedInstruction::PartiallyDecoded(
+                            ui_partially_decoded_instruction,
+                        ) => {
+                            // Check if this is our target program
+                            if ui_partially_decoded_instruction.program_id == target_program_str {
+                                match process_instruction_data(
+                                    &ui_partially_decoded_instruction.data,
+                                ) {
+                                    Ok(mut instruction_events) => {
+                                        events.append(&mut instruction_events)
+                                    }
+                                    Err(e) => log::warn!(
+                                        "Error processing inner instruction {}.{}: {}",
+                                        set_idx,
+                                        ix_idx,
+                                        e
+                                    ),
+                                }
+                            }
+                        }
+                        _ => (), // Ignore other cases as they only apply for System Program
                     }
                 }
+                _ => (), // Ignore other cases as we are using JsonParsed for encoding
             }
         }
     }
