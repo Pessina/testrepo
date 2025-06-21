@@ -6,7 +6,7 @@ mod program_on;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
-    
+
     if args.len() < 2 {
         println!("🔧 Solana Event Monitoring Tool");
         println!("===============================");
@@ -23,7 +23,9 @@ async fn main() -> anyhow::Result<()> {
         println!("  cargo run -- cpi          # Start CPI event monitoring");
         println!("  cargo run -- regular      # Start regular event monitoring");
         println!();
-        println!("💡 Both modes monitor program: Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D on Devnet");
+        println!(
+            "💡 Both modes monitor program: Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D on Devnet"
+        );
         return Ok(());
     }
 
