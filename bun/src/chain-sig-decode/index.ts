@@ -131,10 +131,9 @@ async function fetchAndDecodeEvents() {
           });
         });
 
-        // logs.forEach(log => {
-        //   console.log(log);
-        // });
+        console.log(logs);
 
+    
         // const programLogs = logs.filter(log => 
         //   log.includes("Program data:") || 
         //   log.includes("Program log:")
