@@ -21,11 +21,18 @@ pub struct CustomEvent {
 
 type Result<T> = anyhow::Result<T>;
 
-async fn parse_cpi_events(
+async fn parse_cpi_events<T>(
     rpc_client: &RpcClient,
     signature: &Signature,
     target_program_id: &Pubkey,
-) -> Result<Vec<CustomEvent>> {
+) -> Result<Vec<T>>
+where
+    T: anchor_lang::Event
+        + anchor_lang::AnchorDeserialize
+        + anchor_lang::Discriminator
+        + Clone
+        + std::fmt::Debug,
+{
     let tx = rpc_client
         .get_transaction_with_config(
             signature,
@@ -44,7 +51,7 @@ async fn parse_cpi_events(
     let target_program_str = target_program_id.to_string();
     let mut events = Vec::new();
 
-    let process_instruction_data = |data: &str| -> Result<Vec<CustomEvent>> {
+    let process_instruction_data = |data: &str| -> Result<Vec<T>> {
         let Ok(ix_data) = bs58::decode(data).into_vec() else {
             log::warn!("Failed to decode instruction data for target program");
             return Ok(Vec::new());
@@ -64,14 +71,14 @@ async fn parse_cpi_events(
         let event_discriminator = &ix_data[8..16];
         let event_data = &ix_data[16..];
 
-        // Validate event discriminator matches our CustomEvent
-        if event_discriminator != CustomEvent::DISCRIMINATOR {
+        // Validate event discriminator matches our target event type
+        if event_discriminator != T::DISCRIMINATOR {
             log::debug!("Event discriminator mismatch - not our event type");
             return Ok(Vec::new());
         }
 
-        // Safely deserialize with error handling
-        match CustomEvent::deserialize(&mut &event_data[..]) {
+        // Safely deserialize with error handling using Anchor's deserialize
+        match T::deserialize(&mut &event_data[..]) {
             Ok(event) => Ok(vec![event]),
             Err(e) => {
                 log::warn!(
@@ -83,7 +90,7 @@ async fn parse_cpi_events(
         }
     };
 
-    // Then check inner instructions for CPI calls
+    // Check inner instructions for CPI calls
     let inner_ixs = match meta.inner_instructions {
         solana_transaction_status::option_serializer::OptionSerializer::Some(ixs) => ixs,
         _ => return Ok(Vec::new()),
@@ -114,10 +121,10 @@ async fn parse_cpi_events(
                                 }
                             }
                         }
-                        _ => (), // Ignore other cases as they only apply for System Program
+                        _ => (), // Ignore Parsed variant - only applies to well-known programs (System, Token, etc.)
                     }
                 }
-                _ => (), // Ignore other cases as we are using JsonParsed for encoding
+                _ => (), // Ignore Compiled variant - only used for non-JsonParsed encodings
             }
         }
     }
@@ -125,14 +132,19 @@ async fn parse_cpi_events(
     Ok(events)
 }
 
-async fn subscribe_to_program_logs<F>(
+async fn subscribe_to_program_logs<T, F>(
     program_id: Pubkey,
     rpc_url: &str,
     ws_url: &str,
     mut event_handler: F,
 ) -> Result<()>
 where
-    F: FnMut(CustomEvent, Signature, u64) + Send,
+    T: anchor_lang::Event
+        + anchor_lang::AnchorDeserialize
+        + anchor_lang::Discriminator
+        + Clone
+        + std::fmt::Debug,
+    F: FnMut(T, Signature, u64) + Send,
 {
     let rpc_client = RpcClient::new(rpc_url.to_string());
 
@@ -156,7 +168,7 @@ where
             continue;
         };
 
-        match parse_cpi_events(&rpc_client, &signature, &program_id).await {
+        match parse_cpi_events::<T>(&rpc_client, &signature, &program_id).await {
             Ok(events) => {
                 for event in events {
                     event_handler(event, signature, response.context.slot);
@@ -180,18 +192,24 @@ pub async fn run() -> Result<()> {
 
     let program_id = Pubkey::from_str("Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D")?;
 
-    subscribe_to_program_logs(program_id, rpc_url, ws_url, |event, signature, slot| {
-        println!("📨 VALIDATED CPI Event:");
-        println!("  Signature: {}", signature);
-        println!("  Slot: {}", slot);
-        println!("  Sender: {}", event.sender);
-        println!("  Payload: {}", hex::encode(event.payload));
-        println!("  Key Version: {}", event.key_version);
-        println!("  Deposit: {} lamports", event.deposit);
-        println!("  Chain ID: {}", event.chain_id);
-        println!("  Path: {}", event.path);
-        println!("  Algorithm: {}", event.algo);
-        println!();
-    })
+    // Subscribe to CustomEvent
+    subscribe_to_program_logs::<CustomEvent, _>(
+        program_id,
+        rpc_url,
+        ws_url,
+        |event, signature, slot| {
+            println!("📨 VALIDATED CustomEvent:");
+            println!("  Signature: {}", signature);
+            println!("  Slot: {}", slot);
+            println!("  Sender: {}", event.sender);
+            println!("  Payload: {}", hex::encode(event.payload));
+            println!("  Key Version: {}", event.key_version);
+            println!("  Deposit: {} lamports", event.deposit);
+            println!("  Chain ID: {}", event.chain_id);
+            println!("  Path: {}", event.path);
+            println!("  Algorithm: {}", event.algo);
+            println!();
+        },
+    )
     .await
 }
