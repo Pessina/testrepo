@@ -1,8 +1,11 @@
 use anchor_lang::prelude::*;
-use solana_client::nonblocking::rpc_client::RpcClient;
+use futures_util::StreamExt;
+use solana_client::{
+    nonblocking::{pubsub_client::PubsubClient, rpc_client::RpcClient},
+    rpc_config::{RpcTransactionLogsConfig, RpcTransactionLogsFilter},
+};
 use solana_sdk::{commitment_config::CommitmentConfig, signature::Signature};
-use std::{collections::HashSet, str::FromStr, time::Duration};
-use tokio::time::interval;
+use std::str::FromStr;
 
 #[event]
 #[derive(Debug, Clone)]
@@ -16,10 +19,7 @@ pub struct CustomEvent {
     pub algo: String,
 }
 
-const INSTRUCTION_DISCRIMINATOR: usize = 8;
-const EVENT_DISCRIMINATOR: usize = 8;
-
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+type Result<T> = anyhow::Result<T>;
 
 async fn parse_cpi_events(
     rpc_client: &RpcClient,
@@ -37,7 +37,9 @@ async fn parse_cpi_events(
         )
         .await?;
 
-    let meta = tx.transaction.meta.ok_or("Missing metadata")?;
+    let Some(meta) = tx.transaction.meta else {
+        return Ok(Vec::new());
+    };
 
     let inner_ixs = match meta.inner_instructions {
         solana_transaction_status::option_serializer::OptionSerializer::Some(ixs) => ixs,
@@ -52,8 +54,8 @@ async fn parse_cpi_events(
         _ => return Ok(Vec::new()),
     };
 
-    let mut events = Vec::new();
     let program_id_str = program_id.to_string();
+    let mut events = Vec::new();
 
     for inner_ix_set in inner_ixs {
         for instruction in inner_ix_set.instructions {
@@ -61,9 +63,9 @@ async fn parse_cpi_events(
                 if let Some(program_key) = account_keys.get(compiled_ix.program_id_index as usize) {
                     if program_key == &program_id_str {
                         if let Ok(ix_data) = bs58::decode(&compiled_ix.data).into_vec() {
-                            if ix_data.len() > INSTRUCTION_DISCRIMINATOR + EVENT_DISCRIMINATOR {
-                                let event_data =
-                                    &ix_data[INSTRUCTION_DISCRIMINATOR + EVENT_DISCRIMINATOR..]; // Skip discriminators
+                            // CPI events have instruction discriminator (8) + event discriminator (8) + event data
+                            if ix_data.len() > 16 {
+                                let event_data = &ix_data[16..];
                                 if let Ok(event) = CustomEvent::deserialize(&mut &event_data[..]) {
                                     events.push(event);
                                 }
@@ -78,52 +80,65 @@ async fn parse_cpi_events(
     Ok(events)
 }
 
-async fn monitor_program<F>(
+async fn subscribe_to_program_logs<F>(
     program_id: Pubkey,
-    rpc_client: &RpcClient,
+    rpc_url: &str,
+    ws_url: &str,
     mut event_handler: F,
 ) -> Result<()>
 where
-    F: FnMut(CustomEvent) + Send,
+    F: FnMut(CustomEvent, Signature, u64) + Send,
 {
-    let mut processed = HashSet::new();
-    let mut ticker = interval(Duration::from_secs(3));
+    let rpc_client = RpcClient::new(rpc_url.to_string());
+    let pubsub_client = PubsubClient::new(ws_url).await?;
 
-    loop {
-        ticker.tick().await;
+    // Use RPC-level filtering to only get logs for our program
+    let filter = RpcTransactionLogsFilter::Mentions(vec![program_id.to_string()]);
+    let config = RpcTransactionLogsConfig {
+        commitment: Some(CommitmentConfig::confirmed()),
+    };
 
-        let signatures = rpc_client
-            .get_signatures_for_address(&program_id)
-            .await?
-            .into_iter()
-            .filter(|sig| sig.err.is_none() && !processed.contains(&sig.signature))
-            .take(10)
-            .collect::<Vec<_>>();
+    let (mut stream, _unsubscriber) = pubsub_client.logs_subscribe(filter, config).await?;
 
-        for sig_info in signatures {
-            processed.insert(sig_info.signature.clone());
+    println!("🎯 Subscribed to program: {}", program_id);
+    println!("🔍 Using RPC-level filtering + websocket subscription");
+    println!("📡 Parsing CPI events from inner instructions...\n");
 
-            if let Ok(signature) = Signature::from_str(&sig_info.signature) {
-                if let Ok(events) = parse_cpi_events(rpc_client, &signature, &program_id).await {
+    while let Some(response) = stream.next().await {
+        // Skip failed transactions
+        if response.value.err.is_some() {
+            continue;
+        }
+
+        if let Ok(signature) = Signature::from_str(&response.value.signature) {
+            // Small delay to ensure transaction is finalized
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            match parse_cpi_events(&rpc_client, &signature, &program_id).await {
+                Ok(events) => {
                     for event in events {
-                        event_handler(event);
+                        event_handler(event, signature, response.context.slot);
                     }
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to parse transaction {}: {}", signature, e);
                 }
             }
         }
     }
+
+    Ok(())
 }
 
-pub async fn run() -> anyhow::Result<()> {
+pub async fn run() -> Result<()> {
     let rpc_url = "https://devnet.helius-rpc.com/?api-key=b8c41cbe-c859-4b0b-8c2b-b62c12cfe1de";
+    let ws_url = "wss://devnet.helius-rpc.com/?api-key=b8c41cbe-c859-4b0b-8c2b-b62c12cfe1de";
     let program_id = Pubkey::from_str("Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D")?;
-    let rpc_client = RpcClient::new(rpc_url.to_string());
 
-    println!("🎯 Monitoring program: {}", program_id);
-    println!("🔍 Checking for CPI events every 3 seconds...\n");
-
-    monitor_program(program_id, &rpc_client, |event| {
+    subscribe_to_program_logs(program_id, rpc_url, ws_url, |event, signature, slot| {
         println!("📨 CPI Event:");
+        println!("  Signature: {}", signature);
+        println!("  Slot: {}", slot);
         println!("  Sender: {}", event.sender);
         println!("  Payload: {}", hex::encode(event.payload));
         println!("  Key Version: {}", event.key_version);
@@ -134,5 +149,4 @@ pub async fn run() -> anyhow::Result<()> {
         println!();
     })
     .await
-    .map_err(|e| anyhow::anyhow!(e))
 }
