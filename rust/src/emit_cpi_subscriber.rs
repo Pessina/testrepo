@@ -1,9 +1,8 @@
-use anchor_lang::{AnchorDeserialize, prelude::*};
+use anchor_lang::prelude::*;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{commitment_config::CommitmentConfig, signature::Signature};
-
-use std::collections::HashSet;
-use std::time::Duration;
+use std::{collections::HashSet, str::FromStr, time::Duration};
+use tokio::time::interval;
 
 #[event]
 #[derive(Debug, Clone)]
@@ -17,132 +16,59 @@ pub struct CustomEvent {
     pub algo: String,
 }
 
-// Function to parse CPI events from inner instructions
-async fn parse_cpi_events_from_inner_instructions(
+const INSTRUCTION_DISCRIMINATOR: usize = 8;
+const EVENT_DISCRIMINATOR: usize = 8;
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+async fn parse_cpi_events(
     rpc_client: &RpcClient,
-    tx_signature: Signature,
+    signature: &Signature,
     program_id: &Pubkey,
-) -> anyhow::Result<Vec<CustomEvent>> {
-    let commitment = CommitmentConfig::confirmed();
-
-    println!("🔍 Fetching transaction: {}", tx_signature);
-
-    // Fetch the complete transaction with inner instructions
-    let tx_result = rpc_client
+) -> Result<Vec<CustomEvent>> {
+    let tx = rpc_client
         .get_transaction_with_config(
-            &tx_signature,
+            signature,
             solana_client::rpc_config::RpcTransactionConfig {
                 encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
-                commitment: Some(commitment),
+                commitment: Some(CommitmentConfig::confirmed()),
                 max_supported_transaction_version: Some(0),
             },
         )
         .await?;
 
+    let meta = tx.transaction.meta.ok_or("Missing metadata")?;
+
+    let inner_ixs = match meta.inner_instructions {
+        solana_transaction_status::option_serializer::OptionSerializer::Some(ixs) => ixs,
+        _ => return Ok(Vec::new()),
+    };
+
+    let account_keys = match &tx.transaction.transaction {
+        solana_transaction_status::EncodedTransaction::Json(ui_tx) => match &ui_tx.message {
+            solana_transaction_status::UiMessage::Raw(raw) => &raw.account_keys,
+            _ => return Ok(Vec::new()),
+        },
+        _ => return Ok(Vec::new()),
+    };
+
     let mut events = Vec::new();
+    let program_id_str = program_id.to_string();
 
-    // Extract CPI events from inner instructions
-    if let Some(meta) = tx_result.transaction.meta {
-        let inner_instructions = match meta.inner_instructions {
-            solana_transaction_status::option_serializer::OptionSerializer::Some(inner_ixs) => {
-                inner_ixs
-            }
-            _ => return Ok(events),
-        };
-
-        // Get account keys from the transaction
-        let account_keys = match &tx_result.transaction.transaction {
-            solana_transaction_status::EncodedTransaction::Json(ui_tx) => match &ui_tx.message {
-                solana_transaction_status::UiMessage::Parsed(_) => {
-                    println!("❌ Cannot parse account keys from parsed message format");
-                    return Ok(events);
-                }
-                solana_transaction_status::UiMessage::Raw(raw_msg) => &raw_msg.account_keys,
-            },
-            _ => {
-                println!("❌ Unsupported transaction encoding");
-                return Ok(events);
-            }
-        };
-
-        // Iterate through inner instructions (CPIs)
-        for (outer_idx, inner_instruction_set) in inner_instructions.iter().enumerate() {
-            println!(
-                "🔍 Checking inner instruction set {} with {} instructions",
-                outer_idx,
-                inner_instruction_set.instructions.len()
-            );
-
-            for (inner_idx, instruction) in inner_instruction_set.instructions.iter().enumerate() {
-                // Handle both parsed and raw instruction formats
-                match instruction {
-                    solana_transaction_status::UiInstruction::Compiled(compiled_ix) => {
-                        // Check if this CPI is calling our target program
-                        if let Some(program_key) =
-                            account_keys.get(compiled_ix.program_id_index as usize)
-                        {
-                            if program_key == &program_id.to_string() {
-                                println!(
-                                    "🎯 Found CPI to target program at inner instruction {}:{}.",
-                                    outer_idx, inner_idx
-                                );
-
-                                // Decode the instruction data from base58
-                                match bs58::decode(&compiled_ix.data).into_vec() {
-                                    Ok(ix_data) => {
-                                        println!(
-                                            "📋 CPI instruction data length: {} bytes",
-                                            ix_data.len()
-                                        );
-
-                                        // CPI event data format: [8 bytes discriminator][event data]
-                                        if ix_data.len() > 8 {
-                                            const INSTRUCTION_DISCRIMINATOR: usize = 8;
-                                            const EVENT_DISCRIMINATOR: usize = 8;
-
-                                            let event_data = &ix_data
-                                                [INSTRUCTION_DISCRIMINATOR + EVENT_DISCRIMINATOR..]; // Skip discriminator
-                                            let mut data_slice = event_data;
-
-                                            match CustomEvent::deserialize(&mut data_slice) {
-                                                Ok(event) => {
-                                                    println!(
-                                                        "✅ Successfully decoded CPI event from inner instruction!"
-                                                    );
-                                                    events.push(event);
-                                                }
-                                                Err(e) => {
-                                                    println!(
-                                                        "❌ Failed to deserialize CPI event: {}",
-                                                        e
-                                                    );
-                                                    println!(
-                                                        "   Raw data (first 32 bytes): {:?}",
-                                                        &ix_data
-                                                            [..std::cmp::min(32, ix_data.len())]
-                                                    );
-                                                }
-                                            }
-                                        } else {
-                                            println!(
-                                                "⚠️  CPI instruction data too short: {} bytes",
-                                                ix_data.len()
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        println!(
-                                            "❌ Failed to decode instruction data from base58: {}",
-                                            e
-                                        );
-                                    }
+    for inner_ix_set in inner_ixs {
+        for instruction in inner_ix_set.instructions {
+            if let solana_transaction_status::UiInstruction::Compiled(compiled_ix) = instruction {
+                if let Some(program_key) = account_keys.get(compiled_ix.program_id_index as usize) {
+                    if program_key == &program_id_str {
+                        if let Ok(ix_data) = bs58::decode(&compiled_ix.data).into_vec() {
+                            if ix_data.len() > INSTRUCTION_DISCRIMINATOR + EVENT_DISCRIMINATOR {
+                                let event_data =
+                                    &ix_data[INSTRUCTION_DISCRIMINATOR + EVENT_DISCRIMINATOR..]; // Skip discriminators
+                                if let Ok(event) = CustomEvent::deserialize(&mut &event_data[..]) {
+                                    events.push(event);
                                 }
                             }
                         }
-                    }
-                    solana_transaction_status::UiInstruction::Parsed(_) => {
-                        // Skip parsed instructions as we need raw data
-                        println!("⚠️  Skipping parsed instruction (need raw data for CPI events)");
                     }
                 }
             }
@@ -152,107 +78,61 @@ async fn parse_cpi_events_from_inner_instructions(
     Ok(events)
 }
 
-// Real-time monitoring using polling approach
-async fn monitor_cpi_events_polling<F>(
+async fn monitor_program<F>(
     program_id: Pubkey,
     rpc_client: &RpcClient,
-    event_handler: F,
-) -> anyhow::Result<()>
+    mut event_handler: F,
+) -> Result<()>
 where
-    F: Fn(CustomEvent) + Send + 'static,
+    F: FnMut(CustomEvent) + Send,
 {
-    let mut processed_signatures = HashSet::new();
-    let mut polling_interval = tokio::time::interval(Duration::from_secs(5));
-
-    println!("✅ Starting polling mode for program: {}", program_id);
-    println!("🔍 Checking for new transactions every 5 seconds...");
+    let mut processed = HashSet::new();
+    let mut ticker = interval(Duration::from_secs(3));
 
     loop {
-        polling_interval.tick().await;
+        ticker.tick().await;
 
-        println!("🔄 Polling for new transactions...");
+        let signatures = rpc_client
+            .get_signatures_for_address(&program_id)
+            .await?
+            .into_iter()
+            .filter(|sig| sig.err.is_none() && !processed.contains(&sig.signature))
+            .take(10)
+            .collect::<Vec<_>>();
 
-        // Get recent signatures for the program
-        match rpc_client.get_signatures_for_address(&program_id).await {
-            Ok(signatures) => {
-                let new_signatures: Vec<_> = signatures
-                    .into_iter()
-                    .filter(|sig| !processed_signatures.contains(&sig.signature))
-                    .collect();
+        for sig_info in signatures {
+            processed.insert(sig_info.signature.clone());
 
-                if !new_signatures.is_empty() {
-                    println!("📋 Found {} new transaction(s)", new_signatures.len());
-
-                    for sig_info in new_signatures {
-                        let signature = sig_info.signature.parse::<Signature>()?;
-                        processed_signatures.insert(sig_info.signature.clone());
-
-                        // Skip failed transactions
-                        if sig_info.err.is_some() {
-                            continue;
-                        }
-
-                        // Process the transaction for CPI events
-                        match parse_cpi_events_from_inner_instructions(
-                            rpc_client,
-                            signature,
-                            &program_id,
-                        )
-                        .await
-                        {
-                            Ok(events) => {
-                                for event in events {
-                                    println!("🎉 CPI Event Detected!");
-                                    event_handler(event);
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("❌ Error processing transaction {}: {}", signature, e);
-                            }
-                        }
+            if let Ok(signature) = Signature::from_str(&sig_info.signature) {
+                if let Ok(events) = parse_cpi_events(rpc_client, &signature, &program_id).await {
+                    for event in events {
+                        event_handler(event);
                     }
-                } else {
-                    println!("📭 No new transactions found");
                 }
-            }
-            Err(e) => {
-                eprintln!("❌ Error fetching signatures: {}", e);
             }
         }
     }
 }
 
-// Main run function
 pub async fn run() -> anyhow::Result<()> {
-    println!("🚀 Initializing CPI Event Subscriber...");
-
-    // Setup RPC client for devnet
     let rpc_url = "https://devnet.helius-rpc.com/?api-key=b8c41cbe-c859-4b0b-8c2b-b62c12cfe1de";
+    let program_id = Pubkey::from_str("Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D")?;
     let rpc_client = RpcClient::new(rpc_url.to_string());
 
-    let program_id = "Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D"
-        .parse::<Pubkey>()
-        .expect("Failed to parse program ID");
-
     println!("🎯 Monitoring program: {}", program_id);
-    println!("🌐 Network: Devnet");
-    println!("📡 Mode: Polling (checking every 5 seconds)");
-    println!("💡 Tip: This will detect CPI events emitted by emit_cpi! macro");
-    println!("---");
+    println!("🔍 Checking for CPI events every 3 seconds...\n");
 
-    // Use polling approach (more reliable than websockets)
-    monitor_cpi_events_polling(program_id, &rpc_client, |event| {
-        println!("📨 CPI EVENT RECEIVED:");
-        println!("🔸 Sender: {}", event.sender);
-        println!("🔸 Payload: {:?}", event.payload);
-        println!("🔸 Key Version: {}", event.key_version);
-        println!("🔸 Deposit: {} lamports", event.deposit);
-        println!("🔸 Chain ID: {}", event.chain_id);
-        println!("🔸 Path: {}", event.path);
-        println!("🔸 Algorithm: {}", event.algo);
-        println!("---");
+    monitor_program(program_id, &rpc_client, |event| {
+        println!("📨 CPI Event:");
+        println!("  Sender: {}", event.sender);
+        println!("  Payload: {}", hex::encode(event.payload));
+        println!("  Key Version: {}", event.key_version);
+        println!("  Deposit: {} lamports", event.deposit);
+        println!("  Chain ID: {}", event.chain_id);
+        println!("  Path: {}", event.path);
+        println!("  Algorithm: {}", event.algo);
+        println!();
     })
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(|e| anyhow::anyhow!(e))
 }
