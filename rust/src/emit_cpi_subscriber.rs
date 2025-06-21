@@ -97,7 +97,11 @@ async fn parse_cpi_events_from_inner_instructions(
 
                                         // CPI event data format: [8 bytes discriminator][event data]
                                         if ix_data.len() > 8 {
-                                            let event_data = &ix_data[16..]; // Skip discriminator
+                                            const INSTRUCTION_DISCRIMINATOR: usize = 8;
+                                            const EVENT_DISCRIMINATOR: usize = 8;
+
+                                            let event_data = &ix_data
+                                                [INSTRUCTION_DISCRIMINATOR + EVENT_DISCRIMINATOR..]; // Skip discriminator
                                             let mut data_slice = event_data;
 
                                             match CustomEvent::deserialize(&mut data_slice) {
