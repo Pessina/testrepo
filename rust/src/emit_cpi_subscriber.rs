@@ -21,10 +21,11 @@ pub struct CustomEvent {
 
 type Result<T> = anyhow::Result<T>;
 
+/// Security-focused CPI event parser that validates program ownership and event discriminators
 async fn parse_cpi_events(
     rpc_client: &RpcClient,
     signature: &Signature,
-    program_id: &Pubkey,
+    target_program_id: &Pubkey,
 ) -> Result<Vec<CustomEvent>> {
     let tx = rpc_client
         .get_transaction_with_config(
@@ -49,28 +50,75 @@ async fn parse_cpi_events(
     let account_keys = match &tx.transaction.transaction {
         solana_transaction_status::EncodedTransaction::Json(ui_tx) => match &ui_tx.message {
             solana_transaction_status::UiMessage::Raw(raw) => &raw.account_keys,
-            _ => return Ok(Vec::new()),
+            _ => {
+                log::warn!("Transaction encoding not supported for security validation");
+                return Ok(Vec::new());
+            }
         },
-        _ => return Ok(Vec::new()),
+        _ => {
+            log::warn!("Transaction format not supported for security validation");
+            return Ok(Vec::new());
+        }
     };
 
-    let program_id_str = program_id.to_string();
+    let target_program_str = target_program_id.to_string();
     let mut events = Vec::new();
 
-    for inner_ix_set in inner_ixs {
-        for instruction in inner_ix_set.instructions {
+    for (set_idx, inner_ix_set) in inner_ixs.iter().enumerate() {
+        for (ix_idx, instruction) in inner_ix_set.instructions.iter().enumerate() {
             if let solana_transaction_status::UiInstruction::Compiled(compiled_ix) = instruction {
-                if let Some(program_key) = account_keys.get(compiled_ix.program_id_index as usize) {
-                    if program_key == &program_id_str {
-                        if let Ok(ix_data) = bs58::decode(&compiled_ix.data).into_vec() {
-                            // CPI events have instruction discriminator (8) + event discriminator (8) + event data
-                            if ix_data.len() > 16 {
-                                let event_data = &ix_data[16..];
-                                if let Ok(event) = CustomEvent::deserialize(&mut &event_data[..]) {
-                                    events.push(event);
-                                }
-                            }
-                        }
+                // Validate that the CPI is calling our target program
+                let Some(program_key) = account_keys.get(compiled_ix.program_id_index as usize)
+                else {
+                    log::warn!(
+                        "Invalid program_id_index in inner instruction {}.{}",
+                        set_idx,
+                        ix_idx
+                    );
+                    continue;
+                };
+
+                // Only process CPIs that target our specific program
+                if program_key != &target_program_str {
+                    continue;
+                }
+
+                let Ok(ix_data) = bs58::decode(&compiled_ix.data).into_vec() else {
+                    log::warn!("Failed to decode instruction data for target program CPI");
+                    continue;
+                };
+
+                // Validate minimum length for event data
+                // Format: [8 bytes instruction discriminator][8 bytes event discriminator][event data]
+                if ix_data.len() < 16 {
+                    log::debug!(
+                        "Instruction data too short to contain event: {} bytes",
+                        ix_data.len()
+                    );
+                    continue;
+                }
+
+                // Extract event discriminator and data
+                let event_discriminator = &ix_data[8..16];
+                let event_data = &ix_data[16..];
+
+                // Validate event discriminator matches our CustomEvent
+                if event_discriminator != CustomEvent::DISCRIMINATOR {
+                    log::debug!("Event discriminator mismatch - not our event type");
+                    continue;
+                }
+
+                // Safely deserialize with error handling
+                match CustomEvent::deserialize(&mut &event_data[..]) {
+                    Ok(event) => {
+                        events.push(event);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to deserialize event data from target program: {}",
+                            e
+                        );
+                        continue;
                     }
                 }
             }
@@ -90,9 +138,9 @@ where
     F: FnMut(CustomEvent, Signature, u64) + Send,
 {
     let rpc_client = RpcClient::new(rpc_url.to_string());
+
     let pubsub_client = PubsubClient::new(ws_url).await?;
 
-    // Use RPC-level filtering to only get logs for our program
     let filter = RpcTransactionLogsFilter::Mentions(vec![program_id.to_string()]);
     let config = RpcTransactionLogsConfig {
         commitment: Some(CommitmentConfig::confirmed()),
@@ -100,29 +148,25 @@ where
 
     let (mut stream, _unsubscriber) = pubsub_client.logs_subscribe(filter, config).await?;
 
-    println!("🎯 Subscribed to program: {}", program_id);
-    println!("🔍 Using RPC-level filtering + websocket subscription");
-    println!("📡 Parsing CPI events from inner instructions...\n");
-
     while let Some(response) = stream.next().await {
-        // Skip failed transactions
+        // Skip failed transactions immediately
         if response.value.err.is_some() {
             continue;
         }
 
-        if let Ok(signature) = Signature::from_str(&response.value.signature) {
-            // Small delay to ensure transaction is finalized
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let Ok(signature) = Signature::from_str(&response.value.signature) else {
+            log::warn!("Invalid signature format received");
+            continue;
+        };
 
-            match parse_cpi_events(&rpc_client, &signature, &program_id).await {
-                Ok(events) => {
-                    for event in events {
-                        event_handler(event, signature, response.context.slot);
-                    }
+        match parse_cpi_events(&rpc_client, &signature, &program_id).await {
+            Ok(events) => {
+                for event in events {
+                    event_handler(event, signature, response.context.slot);
                 }
-                Err(e) => {
-                    eprintln!("❌ Failed to parse transaction {}: {}", signature, e);
-                }
+            }
+            Err(e) => {
+                log::error!("❌ Failed to parse transaction {}: {}", signature, e);
             }
         }
     }
@@ -131,12 +175,16 @@ where
 }
 
 pub async fn run() -> Result<()> {
+    // Initialize logging for security monitoring
+    env_logger::init();
+
     let rpc_url = "https://devnet.helius-rpc.com/?api-key=b8c41cbe-c859-4b0b-8c2b-b62c12cfe1de";
     let ws_url = "wss://devnet.helius-rpc.com/?api-key=b8c41cbe-c859-4b0b-8c2b-b62c12cfe1de";
+
     let program_id = Pubkey::from_str("Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D")?;
 
     subscribe_to_program_logs(program_id, rpc_url, ws_url, |event, signature, slot| {
-        println!("📨 CPI Event:");
+        println!("📨 VALIDATED CPI Event:");
         println!("  Signature: {}", signature);
         println!("  Slot: {}", slot);
         println!("  Sender: {}", event.sender);
