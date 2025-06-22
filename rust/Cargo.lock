@@ -3216,6 +3216,7 @@ dependencies = [
  "futures-util",
  "hex",
  "log",
+ "serde_json",
  "solana-client",
  "solana-sdk",
  "solana-transaction-status",

@@ -21,17 +21,6 @@ pub struct CustomEvent {
 
 type Result<T> = anyhow::Result<T>;
 
-fn validate_event_authority(event_authority: &str, target_program_id: &Pubkey) -> Result<bool> {
-    let Ok(event_authority_pubkey) = Pubkey::from_str(event_authority) else {
-        return Ok(false);
-    };
-
-    let (expected_event_authority, _bump) =
-        Pubkey::find_program_address(&[b"__event_authority"], target_program_id);
-
-    Ok(event_authority_pubkey == expected_event_authority)
-}
-
 async fn parse_cpi_events<T>(
     rpc_client: &RpcClient,
     signature: &Signature,
@@ -68,27 +57,20 @@ where
             return Ok(Vec::new());
         };
 
-        // Validate minimum length for event data
-        // Format: [8 bytes instruction discriminator][8 bytes event discriminator][event data]
-        if ix_data.len() < 16 {
-            log::debug!(
-                "Instruction data too short to contain event: {} bytes",
-                ix_data.len()
-            );
+        // Validate event discriminator matches our target event type
+        if !ix_data.starts_with(anchor_lang::event::EVENT_IX_TAG_LE) {
+            log::debug!("Instruction discriminator mismatch - not our instruction type");
             return Ok(Vec::new());
         }
 
-        // Extract event discriminator and data
         let event_discriminator = &ix_data[8..16];
-        let event_data = &ix_data[16..];
-
-        // Validate event discriminator matches our target event type
         if event_discriminator != T::DISCRIMINATOR {
             log::debug!("Event discriminator mismatch - not our event type");
             return Ok(Vec::new());
         }
 
-        // Safely deserialize with error handling using Anchor's deserialize
+        let event_data = &ix_data[16..];
+
         match T::deserialize(&mut &event_data[..]) {
             Ok(event) => Ok(vec![event]),
             Err(e) => {
@@ -117,31 +99,22 @@ where
                         ) => {
                             // Check if this is our target program
                             if ui_partially_decoded_instruction.program_id == target_program_str {
-                                // Validate event authority
-                                let authority_valid = ui_partially_decoded_instruction
-                                    .accounts
-                                    // The event_authority is the first account in the array: https://github.com/solana-foundation/anchor/blob/a5df519319ac39cff21191f2b09d54eda42c5716/lang/attribute/event/src/lib.rs#L181
-                                    .get(0)
-                                    .map(|auth| {
-                                        validate_event_authority(auth, target_program_id)
-                                            .unwrap_or(false)
-                                    })
-                                    .unwrap_or(false);
+                                // The event_authority is validated on the Self Called method by emit_cpi!: https://github.com/solana-foundation/anchor/blob/a5df519319ac39cff21191f2b09d54eda42c5716/lang/syn/src/codegen/program/handlers.rs#L208
+                                // It checks if the event_authority is a signer and that it's the correct PDA.
+                                // Tx will fail if any of the conditions above are not met.
 
-                                if authority_valid {
-                                    match process_instruction_data(
-                                        &ui_partially_decoded_instruction.data,
-                                    ) {
-                                        Ok(mut instruction_events) => {
-                                            events.append(&mut instruction_events)
-                                        }
-                                        Err(e) => log::warn!(
-                                            "Error processing inner instruction {}.{}: {}",
-                                            set_idx,
-                                            ix_idx,
-                                            e
-                                        ),
+                                match process_instruction_data(
+                                    &ui_partially_decoded_instruction.data,
+                                ) {
+                                    Ok(mut instruction_events) => {
+                                        events.append(&mut instruction_events)
                                     }
+                                    Err(e) => log::warn!(
+                                        "Error processing inner instruction {}.{}: {}",
+                                        set_idx,
+                                        ix_idx,
+                                        e
+                                    ),
                                 }
                             }
                         }
