@@ -104,6 +104,7 @@ where
                         solana_transaction_status::UiParsedInstruction::PartiallyDecoded(
                             ui_partially_decoded_instruction,
                         ) => {
+                            println!("account: {:?}", ui_partially_decoded_instruction.accounts);
                             // Check if this is our target program
                             if ui_partially_decoded_instruction.program_id == target_program_str {
                                 match process_instruction_data(
