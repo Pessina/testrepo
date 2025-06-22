@@ -104,7 +104,9 @@ where
                         solana_transaction_status::UiParsedInstruction::PartiallyDecoded(
                             ui_partially_decoded_instruction,
                         ) => {
-                            println!("account: {:?}", ui_partially_decoded_instruction.accounts);
+                            // TODO: Should check if the event_authority it's the correct PDA.
+                            // It's extracted from ui_partially_decoded_instruction.accounts array and the order of the account's it's the same as declared in the contract that emits the CPI: https://github.com/Pessina/testrepo/blob/0c159e17254c935f3a115e731b7609f40d413f7b/emit-cpi/programs/emit-cpi/src/lib.rs#L30
+
                             // Check if this is our target program
                             if ui_partially_decoded_instruction.program_id == target_program_str {
                                 match process_instruction_data(
