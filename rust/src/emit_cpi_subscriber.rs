@@ -44,6 +44,8 @@ where
         )
         .await?;
 
+    // println!("tx: {}", serde_json::to_string_pretty(&tx)?);
+
     let Some(meta) = tx.transaction.meta else {
         return Ok(Vec::new());
     };
@@ -99,7 +101,7 @@ where
                         ) => {
                             // Check if this is our target program
                             if ui_partially_decoded_instruction.program_id == target_program_str {
-                                // The event_authority is validated on the Self Called method by emit_cpi!: https://github.com/solana-foundation/anchor/blob/a5df519319ac39cff21191f2b09d54eda42c5716/lang/syn/src/codegen/program/handlers.rs#L208
+                                // The event_authority is validated on the Self Called method by emit_cpi!: https://github.com/solana-foundation/anchor/blob/a5df519319ac39cff21191f2b09d54eda42c5716/lang/syn/src/codegen/program/handlers.rs#L208, https://github.com/solana-foundation/anchor/blob/a5df519319ac39cff21191f2b09d54eda42c5716/tests/events/tests/events.ts#L69
                                 // It checks if the event_authority is a signer and that it's the correct PDA.
                                 // Tx will fail if any of the conditions above are not met.
 
