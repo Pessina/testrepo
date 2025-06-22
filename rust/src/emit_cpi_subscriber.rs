@@ -21,6 +21,17 @@ pub struct CustomEvent {
 
 type Result<T> = anyhow::Result<T>;
 
+fn validate_event_authority(event_authority: &str, target_program_id: &Pubkey) -> Result<bool> {
+    let Ok(event_authority_pubkey) = Pubkey::from_str(event_authority) else {
+        return Ok(false);
+    };
+
+    let (expected_event_authority, _bump) =
+        Pubkey::find_program_address(&[b"__event_authority"], target_program_id);
+
+    Ok(event_authority_pubkey == expected_event_authority)
+}
+
 async fn parse_cpi_events<T>(
     rpc_client: &RpcClient,
     signature: &Signature,
@@ -104,23 +115,33 @@ where
                         solana_transaction_status::UiParsedInstruction::PartiallyDecoded(
                             ui_partially_decoded_instruction,
                         ) => {
-                            // TODO: Should check if the event_authority it's the correct PDA.
-                            // It's extracted from ui_partially_decoded_instruction.accounts array and the order of the account's it's the same as declared in the contract that emits the CPI: https://github.com/Pessina/testrepo/blob/0c159e17254c935f3a115e731b7609f40d413f7b/emit-cpi/programs/emit-cpi/src/lib.rs#L30
-
                             // Check if this is our target program
                             if ui_partially_decoded_instruction.program_id == target_program_str {
-                                match process_instruction_data(
-                                    &ui_partially_decoded_instruction.data,
-                                ) {
-                                    Ok(mut instruction_events) => {
-                                        events.append(&mut instruction_events)
+                                // Validate event authority
+                                let authority_valid = ui_partially_decoded_instruction
+                                    .accounts
+                                    // The event_authority is the first account in the array: https://github.com/solana-foundation/anchor/blob/a5df519319ac39cff21191f2b09d54eda42c5716/lang/attribute/event/src/lib.rs#L181
+                                    .get(0)
+                                    .map(|auth| {
+                                        validate_event_authority(auth, target_program_id)
+                                            .unwrap_or(false)
+                                    })
+                                    .unwrap_or(false);
+
+                                if authority_valid {
+                                    match process_instruction_data(
+                                        &ui_partially_decoded_instruction.data,
+                                    ) {
+                                        Ok(mut instruction_events) => {
+                                            events.append(&mut instruction_events)
+                                        }
+                                        Err(e) => log::warn!(
+                                            "Error processing inner instruction {}.{}: {}",
+                                            set_idx,
+                                            ix_idx,
+                                            e
+                                        ),
                                     }
-                                    Err(e) => log::warn!(
-                                        "Error processing inner instruction {}.{}: {}",
-                                        set_idx,
-                                        ix_idx,
-                                        e
-                                    ),
                                 }
                             }
                         }
@@ -150,7 +171,6 @@ where
     F: FnMut(T, Signature, u64) + Send,
 {
     let rpc_client = RpcClient::new(rpc_url.to_string());
-
     let pubsub_client = PubsubClient::new(ws_url).await?;
 
     let filter = RpcTransactionLogsFilter::Mentions(vec![program_id.to_string()]);
@@ -201,7 +221,7 @@ pub async fn run() -> Result<()> {
         rpc_url,
         ws_url,
         |event, signature, slot| {
-            println!("📨 VALIDATED CustomEvent:");
+            println!("📨 VALIDATED CPI Event:");
             println!("  Signature: {}", signature);
             println!("  Slot: {}", slot);
             println!("  Sender: {}", event.sender);

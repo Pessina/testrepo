@@ -7,7 +7,7 @@ describe("call-emit-cpi", () => {
 
   const program = anchor.workspace.callEmitCpi as Program<CallEmitCpi>;
 
-  it.only("Triggers emit CPI!", async () => {
+  it("Triggers emit CPI!", async () => {
     const emitCpiProgramId = new anchor.web3.PublicKey(
       "Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D"
     );
