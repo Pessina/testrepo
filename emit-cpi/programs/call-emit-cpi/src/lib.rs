@@ -3,7 +3,7 @@ use anchor_lang::prelude::*;
 declare_id!("6nR2CdJBP7kSHjt3WjrCsBtcvLfofvhYd1H8qXhoezEg");
 
 // Import the emit_cpi program for CPI calls
-use emit_cpi::{self, program::EmitCpi, CustomEvent};
+use emit_cpi::{self, program::EmitCpi, SignatureRequestedEvent};
 
 #[program]
 pub mod call_emit_cpi {
@@ -18,8 +18,11 @@ pub mod call_emit_cpi {
         chain_id: u64,
         path: String,
         algo: String,
+        dest: String,
+        params: String,
+        fee_payer: Option<Pubkey>,
     ) -> Result<()> {
-        let custom_event = CustomEvent {
+        let signature_event = SignatureRequestedEvent {
             sender,
             payload,
             key_version,
@@ -27,6 +30,9 @@ pub mod call_emit_cpi {
             chain_id,
             path,
             algo,
+            dest,
+            params,
+            fee_payer,
         };
 
         // Create CPI context using the idiomatic Anchor pattern
@@ -39,7 +45,7 @@ pub mod call_emit_cpi {
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
         // Make the CPI call using the generated cpi function
-        emit_cpi::cpi::emit_event(cpi_ctx, Some(custom_event))?;
+        emit_cpi::cpi::emit_event(cpi_ctx, Some(signature_event))?;
 
         msg!("Successfully triggered emit_event via CPI");
         Ok(())
