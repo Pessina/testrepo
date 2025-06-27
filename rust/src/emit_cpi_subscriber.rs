@@ -8,8 +8,8 @@ use solana_sdk::{commitment_config::CommitmentConfig, signature::Signature};
 use std::str::FromStr;
 
 #[event]
-#[derive(Debug, Clone)]
-pub struct CustomEvent {
+#[derive(Clone, Debug)]
+pub struct SignatureRequestedEvent {
     pub sender: Pubkey,
     pub payload: [u8; 32],
     pub key_version: u32,
@@ -17,6 +17,9 @@ pub struct CustomEvent {
     pub chain_id: u64,
     pub path: String,
     pub algo: String,
+    pub dest: String,
+    pub params: String,
+    pub fee_payer: Option<Pubkey>,
 }
 
 type Result<T> = anyhow::Result<T>;
@@ -192,7 +195,7 @@ pub async fn run() -> Result<()> {
     let program_id = Pubkey::from_str("Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D")?;
 
     // Subscribe to CustomEvent
-    subscribe_to_program_logs::<CustomEvent, _>(
+    subscribe_to_program_logs::<SignatureRequestedEvent, _>(
         program_id,
         rpc_url,
         ws_url,
