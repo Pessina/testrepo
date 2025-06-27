@@ -25,7 +25,7 @@ describe("emit-cpi", () => {
     const signatureEvent = createSampleEvent();
 
     const signature = await program.methods
-      .emitEventRegular(signatureEvent)
+      .emitEvent(signatureEvent)
       .accounts({
         payer: anchor.getProvider().publicKey,
       })

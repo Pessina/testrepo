@@ -8,12 +8,8 @@ describe("call-emit-cpi", () => {
 
   const program = anchor.workspace.callEmitCpi as Program<CallEmitCpi>;
 
-  it("Triggers emit CPI with cost logging!", async () => {
-    const emitCpiProgramId = new anchor.web3.PublicKey(
-      "Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D"
-    );
-
-    // Test data for the SignatureRequestedEvent
+  // Shared test data for the SignatureRequestedEvent
+  const createTestData = () => {
     const sender = anchor.web3.Keypair.generate().publicKey;
     const payload = Array(32)
       .fill(0)
@@ -27,6 +23,54 @@ describe("call-emit-cpi", () => {
     const params = "signature_params";
     const feePayer = anchor.getProvider().publicKey;
 
+    return {
+      sender,
+      payload,
+      keyVersion,
+      deposit,
+      chainId,
+      path,
+      algo,
+      dest,
+      params,
+      feePayer,
+    };
+  };
+
+  it("Triggers emit regular (emit! macro) via CPI with cost logging", async () => {
+    const testData = createTestData();
+
+    const signature = await program.methods
+      .triggerEmitRegular(
+        testData.sender,
+        testData.payload,
+        testData.keyVersion,
+        testData.deposit,
+        testData.chainId,
+        testData.path,
+        testData.algo,
+        testData.dest,
+        testData.params,
+        testData.feePayer
+      )
+      .accounts({
+        payer: anchor.getProvider().publicKey,
+      })
+      .rpc();
+
+    await logComputeUnitsUsed({
+      txSignature: signature,
+      memo: "CPI emit! macro",
+    });
+  });
+
+  it("Triggers emit_cpi (emit_cpi! macro) via CPI with cost logging", async () => {
+    const emitCpiProgramId = new anchor.web3.PublicKey(
+      "Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D"
+    );
+
+    const testData = createTestData();
+
     // Generate event authority PDA - this is required by #[event_cpi]
     const [eventAuthority] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("__event_authority")],
@@ -35,16 +79,16 @@ describe("call-emit-cpi", () => {
 
     const signature = await program.methods
       .triggerEmitCpi(
-        sender,
-        payload,
-        keyVersion,
-        deposit,
-        chainId,
-        path,
-        algo,
-        dest,
-        params,
-        feePayer
+        testData.sender,
+        testData.payload,
+        testData.keyVersion,
+        testData.deposit,
+        testData.chainId,
+        testData.path,
+        testData.algo,
+        testData.dest,
+        testData.params,
+        testData.feePayer
       )
       .accounts({
         payer: anchor.getProvider().publicKey,
@@ -54,7 +98,7 @@ describe("call-emit-cpi", () => {
 
     await logComputeUnitsUsed({
       txSignature: signature,
-      memo: "CPI emit event",
+      memo: "CPI emit_cpi! macro",
     });
   });
 });

@@ -66,7 +66,21 @@ export const logComputeUnitsUsed = async ({
   if (txInfo && txInfo.meta) {
     const computeUnits = txInfo.meta.computeUnitsConsumed;
 
-    console.log(`${memo ? `${memo}: ` : ""}${computeUnits} CU`);
+    // Customizable based on the current fee: https://triton.one/solana-prioritization-fees/, https://triton.one/solana-prioritization-fees/
+    const PRIORITY_FEE_MICRO_LAMPORTS = 10_000;
+    const MICRO_LAMPORTS_PER_LAMPORTS = 1_000_000;
+    const LAMPORTS_PER_SOL = 1_000_000_000;
+
+    const totalLamportsUsed =
+      txInfo.meta.fee +
+      (computeUnits * PRIORITY_FEE_MICRO_LAMPORTS) /
+        MICRO_LAMPORTS_PER_LAMPORTS;
+
+    console.log(
+      `${memo ? `${memo}: ` : ""}${computeUnits} CU, ${
+        totalLamportsUsed / LAMPORTS_PER_SOL
+      } SOL`
+    );
   }
 };
 
