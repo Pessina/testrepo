@@ -4,6 +4,12 @@ import * as anchor from "@coral-xyz/anchor";
 const TRANSACTION_RETRY_COUNT = 5;
 const RETRY_DELAY_MS = 1000;
 
+// Customizable based on the current fee, maybe fetch it: https://triton.one/solana-prioritization-fees/, https://triton.one/solana-prioritization-fees/
+const PRIORITY_FEE_MICRO_LAMPORTS = 10_000;
+const MICRO_LAMPORTS_PER_LAMPORTS = 1_000_000;
+const LAMPORTS_PER_SOL = 1_000_000_000;
+const PRICE_PER_SIGNATURE = 5000;
+
 /**
  * Confirms a transaction and waits for it to be processed
  * @param connection Solana connection
@@ -64,17 +70,16 @@ export const logComputeUnitsUsed = async ({
   const txInfo = await getTxInfo({ txSignature });
 
   if (txInfo && txInfo.meta) {
+    const numSignatures =
+      txInfo.transaction.message.header.numRequiredSignatures;
+    const baseFee = numSignatures * PRICE_PER_SIGNATURE;
+
     const computeUnits = txInfo.meta.computeUnitsConsumed;
-
-    // Customizable based on the current fee, maybe fetch it: https://triton.one/solana-prioritization-fees/, https://triton.one/solana-prioritization-fees/
-    const PRIORITY_FEE_MICRO_LAMPORTS = 10_000;
-    const MICRO_LAMPORTS_PER_LAMPORTS = 1_000_000;
-    const LAMPORTS_PER_SOL = 1_000_000_000;
-
-    const totalLamportsUsed =
-      txInfo.meta.fee +
+    const priorityFee =
       (computeUnits * PRIORITY_FEE_MICRO_LAMPORTS) /
-        MICRO_LAMPORTS_PER_LAMPORTS;
+      MICRO_LAMPORTS_PER_LAMPORTS;
+
+    const totalLamportsUsed = baseFee + priorityFee;
 
     console.log(
       `${memo ? `${memo}: ` : ""}${computeUnits} CU, ${
@@ -97,7 +102,16 @@ export const getTxInfo = async ({ txSignature }: { txSignature: string }) => {
     "finalized"
   );
 
+  // console.log("Transaction Info:", JSON.stringify(txInfo, null, 2));
+
   return txInfo as unknown as {
+    transaction: {
+      message: {
+        header: {
+          numRequiredSignatures: number;
+        };
+      };
+    };
     meta: {
       returnData: {
         data: string[];
