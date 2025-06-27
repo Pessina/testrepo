@@ -66,7 +66,7 @@ export const logComputeUnitsUsed = async ({
   if (txInfo && txInfo.meta) {
     const computeUnits = txInfo.meta.computeUnitsConsumed;
 
-    // Customizable based on the current fee: https://triton.one/solana-prioritization-fees/, https://triton.one/solana-prioritization-fees/
+    // Customizable based on the current fee, maybe fetch it: https://triton.one/solana-prioritization-fees/, https://triton.one/solana-prioritization-fees/
     const PRIORITY_FEE_MICRO_LAMPORTS = 10_000;
     const MICRO_LAMPORTS_PER_LAMPORTS = 1_000_000;
     const LAMPORTS_PER_SOL = 1_000_000_000;
