@@ -1,0 +1,24 @@
+[toolchain]
+package_manager = "yarn"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+emit_cpi = "Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D"
+call_emit_cpi = "6nR2CdJBP7kSHjt3WjrCsBtcvLfofvhYd1H8qXhoezEg"
+
+[programs.devnet]
+emit_cpi = "Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D"
+call_emit_cpi = "6nR2CdJBP7kSHjt3WjrCsBtcvLfofvhYd1H8qXhoezEg"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

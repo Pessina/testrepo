@@ -1,0 +1,133 @@
+{
+    "address": "Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D",
+    "metadata": {
+      "name": "emit_cpi",
+      "version": "0.1.0",
+      "spec": "0.1.0",
+      "description": "Created with Anchor"
+    },
+    "instructions": [
+      {
+        "name": "emit_event",
+        "discriminator": [
+          82,
+          133,
+          188,
+          136,
+          167,
+          139,
+          209,
+          52
+        ],
+        "accounts": [
+          {
+            "name": "payer",
+            "writable": true,
+            "signer": true
+          },
+          {
+            "name": "event_authority",
+            "pda": {
+              "seeds": [
+                {
+                  "kind": "const",
+                  "value": [
+                    95,
+                    95,
+                    101,
+                    118,
+                    101,
+                    110,
+                    116,
+                    95,
+                    97,
+                    117,
+                    116,
+                    104,
+                    111,
+                    114,
+                    105,
+                    116,
+                    121
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "name": "program"
+          }
+        ],
+        "args": [
+          {
+            "name": "custom_event",
+            "type": {
+              "option": {
+                "defined": {
+                  "name": "CustomEvent"
+                }
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "name": "CustomEvent",
+        "discriminator": [
+          101,
+          189,
+          94,
+          83,
+          118,
+          162,
+          97,
+          220
+        ]
+      }
+    ],
+    "types": [
+      {
+        "name": "CustomEvent",
+        "type": {
+          "kind": "struct",
+          "fields": [
+            {
+              "name": "sender",
+              "type": "pubkey"
+            },
+            {
+              "name": "payload",
+              "type": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            },
+            {
+              "name": "key_version",
+              "type": "u32"
+            },
+            {
+              "name": "deposit",
+              "type": "u64"
+            },
+            {
+              "name": "chain_id",
+              "type": "u64"
+            },
+            {
+              "name": "path",
+              "type": "string"
+            },
+            {
+              "name": "algo",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    ]
+  }

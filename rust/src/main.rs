@@ -1,72 +1,48 @@
-use anchor_client::{Client, Cluster};
-use anchor_lang::prelude::*;
-use solana_sdk::{commitment_config::CommitmentConfig, signature::Keypair};
-use std::sync::Arc;
-use std::thread;
+use std::env;
 
-#[event]
-#[derive(Debug)]
-pub struct SignatureRequestedEvent {
-    pub sender: Pubkey,
-    pub payload: [u8; 32],
-    pub key_version: u32,
-    pub deposit: u64,
-    pub chain_id: u64,
-    pub path: String,
-    pub algo: String,
-    pub dest: String,
-    pub params: String,
-    pub fee_payer: Option<Pubkey>,
-}
+mod emit_cpi_subscriber;
+mod program_on;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("🔄 Setting up event subscription...");
+    let args: Vec<String> = env::args().collect();
 
-    let _client_handle = tokio::task::spawn_blocking(move || {
-        let payer = Keypair::new();
-        let cluster = Cluster::Custom(
-            "https://devnet.helius-rpc.com/?api-key=b8c41cbe-c859-4b0b-8c2b-b62c12cfe1de"
-                .to_string(),
-            "wss://devnet.helius-rpc.com/?api-key=b8c41cbe-c859-4b0b-8c2b-b62c12cfe1de".to_string(),
+    if args.len() < 2 {
+        println!("🔧 Solana Event Monitoring Tool");
+        println!("===============================");
+        println!();
+        println!("Usage:");
+        println!("  cargo run -- cpi          # Run CPI event subscriber");
+        println!("  cargo run -- regular      # Run regular event subscriber");
+        println!();
+        println!("Description:");
+        println!("  cpi     - Monitor CPI events from emit_cpi! macro (cross-program invocations)");
+        println!("  regular - Monitor regular events from emit! macro (direct program events)");
+        println!();
+        println!("Examples:");
+        println!("  cargo run -- cpi          # Start CPI event monitoring");
+        println!("  cargo run -- regular      # Start regular event monitoring");
+        println!();
+        println!(
+            "💡 Both modes monitor program: Aqfn78XViUa2vS8JZKcLS9cvof8CJvNxkWyrABfweA4D on Devnet"
         );
-        let client =
-            Client::new_with_options(cluster, Arc::new(payer), CommitmentConfig::confirmed());
-
-        let program_id = "BtGZEs9ZJX3hAQuY5er8iyWrGsrPRZYupEtVSS129XKo"
-            .parse::<Pubkey>()
-            .expect("Failed to parse program ID");
-        let program = client.program(program_id).expect("Failed to get program");
-
-        println!("✅ Event subscription active for program: {}", program_id);
-        println!("🔍 Listening for SignatureRequestedEvent...");
-        println!("---");
-
-        let _unsubscriber = program
-            .on(move |ctx, event: SignatureRequestedEvent| {
-                println!("📨 EVENT RECEIVED:");
-                println!("🔸 Transaction Signature: {:?}", ctx.signature);
-                println!("🔸 Sender: {}", event.sender);
-                println!("🔸 Payload: {:?}", event.payload);
-                println!("🔸 Key Version: {}", event.key_version);
-                println!("🔸 Deposit: {} lamports", event.deposit);
-                println!("🔸 Chain ID: {}", event.chain_id);
-                println!("🔸 Path: {}", event.path);
-                println!("🔸 Algorithm: {}", event.algo);
-                println!("🔸 Destination: {}", event.dest);
-                println!("🔸 Parameters: {}", event.params);
-                println!("🔸 Fee Payer: {:?}", event.fee_payer);
-                println!("---");
-            })
-            .expect("Failed to subscribe to events");
-
-        loop {
-            thread::sleep(std::time::Duration::from_secs(1));
-        }
-    });
-
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-        println!("⏰ Still listening for events...");
+        return Ok(());
     }
+
+    match args[1].as_str() {
+        "cpi" => {
+            println!("🚀 Starting CPI Event Subscriber...");
+            emit_cpi_subscriber::run().await?;
+        }
+        "regular" => {
+            println!("🚀 Starting Regular Event Subscriber...");
+            program_on::run().await?;
+        }
+        _ => {
+            println!("❌ Invalid argument: {}", args[1]);
+            println!("Use 'cpi' or 'regular'");
+        }
+    }
+
+    Ok(())
 }
