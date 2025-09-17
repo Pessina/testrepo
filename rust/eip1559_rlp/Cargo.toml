@@ -1,0 +1,10 @@
+[package]
+name = "eip1559_rlp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ethereum = "0.15"
+ethereum-types = "0.14"
+rlp = "0.5"
+hex = "0.4"
