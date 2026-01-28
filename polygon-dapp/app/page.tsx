@@ -2,8 +2,8 @@
 
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
-import { parseEther, formatEther, type Address } from "viem";
-import { useState, useCallback, useEffect } from "react";
+import { formatEther, type Address } from "viem";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -13,18 +13,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  ERC20_ABI,
-  VALIDATOR_SHARE_ABI,
-  STAKE_MANAGER_ABI,
-  NETWORK_CONTRACTS,
-} from "@/lib/contracts";
+import { PolygonStaker, CHORUS_ONE_POLYGON_VALIDATORS } from "@chorus-one/polygon";
 
-const { stakingTokenAddress: POL_TOKEN, stakeManagerAddress: STAKE_MANAGER } =
-  NETWORK_CONTRACTS.mainnet;
+const VALIDATOR_SHARE = CHORUS_ONE_POLYGON_VALIDATORS.mainnet;
 
 type StakeInfo = {
   totalStaked: string;
+  shares: string;
   rewards: string;
   allowance: string;
   unbondNonce: string;
@@ -36,90 +31,74 @@ export default function Home() {
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
 
-  const [validatorShare, setValidatorShare] = useState("");
+  const [staker, setStaker] = useState<PolygonStaker | null>(null);
   const [amount, setAmount] = useState("");
   const [info, setInfo] = useState<StakeInfo | null>(null);
-  const [polBalance, setPolBalance] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  const vsAddr = validatorShare as Address;
-
-  const waitForTx = useCallback(
-    async (hash: `0x${string}`) => {
-      if (!publicClient) return;
-      setStatus(`Tx sent: ${hash.slice(0, 10)}... waiting...`);
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
-      setStatus(
-        `Tx ${receipt.status === "success" ? "confirmed" : "failed"}: ${hash.slice(0, 10)}...`
-      );
-    },
-    [publicClient]
-  );
-
-  const fetchPolBalance = useCallback(async () => {
-    if (!address || !publicClient) return;
-    const balance = await publicClient.readContract({
-      address: POL_TOKEN,
-      abi: ERC20_ABI,
-      functionName: "balanceOf",
-      args: [address],
-    });
-    setPolBalance(formatEther(balance));
-  }, [address, publicClient]);
-
   useEffect(() => {
-    fetchPolBalance();
-  }, [fetchPolBalance]);
+    const instance = new PolygonStaker({ network: "mainnet" });
+    setStaker(instance);
+  }, []);
 
-  const refresh = useCallback(async () => {
-    if (!address || !publicClient || !validatorShare) return;
+  const waitForTx = async (hash: `0x${string}`) => {
+    if (!publicClient) return;
+    setStatus(`Tx sent: ${hash.slice(0, 10)}... waiting...`);
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    setStatus(
+      `Tx ${receipt.status === "success" ? "confirmed" : "failed"}: ${hash.slice(0, 10)}...`
+    );
+  };
+
+  const sendTx = async (tx: {
+    to: Address;
+    data: `0x${string}`;
+    value: bigint;
+  }) => {
+    if (!walletClient || !address) throw new Error("Wallet not connected");
+    const hash = await walletClient.sendTransaction({
+      to: tx.to,
+      data: tx.data,
+      value: tx.value,
+      account: address,
+      chain: walletClient.chain,
+    });
+    await waitForTx(hash);
+  };
+
+  const refresh = async () => {
+    if (!address || !staker) return;
     try {
-      const [stakeResult, rewards, allowance, nonce, epoch] =
-        await Promise.all([
-          publicClient.readContract({
-            address: vsAddr,
-            abi: VALIDATOR_SHARE_ABI,
-            functionName: "getTotalStake",
-            args: [address],
-          }),
-          publicClient.readContract({
-            address: vsAddr,
-            abi: VALIDATOR_SHARE_ABI,
-            functionName: "getLiquidRewards",
-            args: [address],
-          }),
-          publicClient.readContract({
-            address: POL_TOKEN,
-            abi: ERC20_ABI,
-            functionName: "allowance",
-            args: [address, STAKE_MANAGER],
-          }),
-          publicClient.readContract({
-            address: vsAddr,
-            abi: VALIDATOR_SHARE_ABI,
-            functionName: "unbondNonces",
-            args: [address],
-          }),
-          publicClient.readContract({
-            address: STAKE_MANAGER,
-            abi: STAKE_MANAGER_ABI,
-            functionName: "epoch",
-          }),
-        ]);
+      const [stakeInfo, rewards, allowance, nonce, epoch] = await Promise.all([
+        staker.getStake({
+          delegatorAddress: address,
+          validatorShareAddress: VALIDATOR_SHARE,
+        }),
+        staker.getLiquidRewards({
+          delegatorAddress: address,
+          validatorShareAddress: VALIDATOR_SHARE,
+        }),
+        staker.getAllowance(address),
+        staker.getUnbondNonce({
+          delegatorAddress: address,
+          validatorShareAddress: VALIDATOR_SHARE,
+        }),
+        staker.getEpoch(),
+      ]);
 
       setInfo({
-        totalStaked: formatEther(stakeResult[0]),
+        totalStaked: formatEther(stakeInfo.totalStaked),
+        shares: stakeInfo.shares.toString(),
         rewards: formatEther(rewards),
         allowance: formatEther(allowance),
         unbondNonce: nonce.toString(),
         epoch: epoch.toString(),
       });
-      await fetchPolBalance();
     } catch (e) {
       setStatus(`Error reading state: ${e instanceof Error ? e.message : e}`);
     }
-  }, [address, publicClient, validatorShare, vsAddr, fetchPolBalance]);
+  };
 
   const exec = async (fn: () => Promise<void>) => {
     setLoading(true);
@@ -135,88 +114,90 @@ export default function Home() {
 
   const approveAndStake = () =>
     exec(async () => {
-      if (!walletClient || !publicClient) return;
-      const amountWei = parseEther(amount);
+      if (!staker || !address) return;
 
-      const allowance = await publicClient.readContract({
-        address: POL_TOKEN,
-        abi: ERC20_ABI,
-        functionName: "allowance",
-        args: [address!, STAKE_MANAGER],
-      });
+      const allowance = await staker.getAllowance(address);
+      const requiredAllowance = BigInt(Math.ceil(parseFloat(amount) * 1e18));
 
-      if (allowance < amountWei) {
+      if (allowance < requiredAllowance) {
         setStatus("Approving POL...");
-        const approveHash = await walletClient.writeContract({
-          address: POL_TOKEN,
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [STAKE_MANAGER, amountWei],
-        });
-        await waitForTx(approveHash);
+        const { tx: approveTx } = await staker.buildApproveTx({ amount });
+        await sendTx(approveTx);
       }
 
       setStatus("Staking POL...");
-      const stakeHash = await walletClient.writeContract({
-        address: vsAddr,
-        abi: VALIDATOR_SHARE_ABI,
-        functionName: "buyVoucherPOL",
-        args: [amountWei, 0n],
+      const { tx: stakeTx } = await staker.buildStakeTx({
+        delegatorAddress: address,
+        validatorShareAddress: VALIDATOR_SHARE,
+        amount,
       });
-      await waitForTx(stakeHash);
+      await sendTx(stakeTx);
     });
 
   const unstake = () =>
     exec(async () => {
-      if (!walletClient) return;
-      const amountWei = parseEther(amount);
-      const hash = await walletClient.writeContract({
-        address: vsAddr,
-        abi: VALIDATOR_SHARE_ABI,
-        functionName: "sellVoucher_newPOL",
-        args: [amountWei, amountWei],
+      if (!staker || !address) return;
+      setStatus("Unstaking POL...");
+      const { tx } = await staker.buildUnstakeTx({
+        delegatorAddress: address,
+        validatorShareAddress: VALIDATOR_SHARE,
+        amount,
       });
-      await waitForTx(hash);
+      await sendTx(tx);
     });
 
   const withdraw = () =>
     exec(async () => {
-      if (!walletClient || !publicClient) return;
-      const nonce = await publicClient.readContract({
-        address: vsAddr,
-        abi: VALIDATOR_SHARE_ABI,
-        functionName: "unbondNonces",
-        args: [address!],
+      if (!staker || !address) return;
+
+      const unbondNonce = await staker.getUnbondNonce({
+        delegatorAddress: address,
+        validatorShareAddress: VALIDATOR_SHARE,
       });
-      const hash = await walletClient.writeContract({
-        address: vsAddr,
-        abi: VALIDATOR_SHARE_ABI,
-        functionName: "unstakeClaimTokens_newPOL",
-        args: [nonce],
+
+      const unbond = await staker.getUnbond({
+        delegatorAddress: address,
+        validatorShareAddress: VALIDATOR_SHARE,
+        unbondNonce,
       });
-      await waitForTx(hash);
+
+      const currentEpoch = await staker.getEpoch();
+      if (currentEpoch < unbond.withdrawEpoch) {
+        setStatus(
+          `Unbonding not complete. Current epoch: ${currentEpoch}, Withdraw epoch: ${unbond.withdrawEpoch}`
+        );
+        return;
+      }
+
+      setStatus("Withdrawing POL...");
+      const { tx } = await staker.buildWithdrawTx({
+        delegatorAddress: address,
+        validatorShareAddress: VALIDATOR_SHARE,
+        unbondNonce,
+      });
+      await sendTx(tx);
     });
 
   const claimRewards = () =>
     exec(async () => {
-      if (!walletClient) return;
-      const hash = await walletClient.writeContract({
-        address: vsAddr,
-        abi: VALIDATOR_SHARE_ABI,
-        functionName: "withdrawRewardsPOL",
+      if (!staker || !address) return;
+      setStatus("Claiming rewards...");
+      const { tx } = await staker.buildClaimRewardsTx({
+        delegatorAddress: address,
+        validatorShareAddress: VALIDATOR_SHARE,
       });
-      await waitForTx(hash);
+      await sendTx(tx);
     });
 
   const compound = () =>
     exec(async () => {
-      if (!walletClient) return;
-      const hash = await walletClient.writeContract({
-        address: vsAddr,
-        abi: VALIDATOR_SHARE_ABI,
-        functionName: "restakePOL",
+      if (!staker || !address) return;
+      setStatus("Compounding rewards...");
+      const { tx } = await staker.buildCompoundTx({
+        delegatorAddress: address,
+        validatorShareAddress: VALIDATOR_SHARE,
       });
-      await waitForTx(hash);
+      await sendTx(tx);
     });
 
   return (
@@ -226,32 +207,18 @@ export default function Home() {
         <ConnectButton />
       </div>
 
-      {address && (
+      {address && staker && (
         <>
-          {polBalance !== null && (
-            <p className="text-sm font-mono">POL Balance: {polBalance}</p>
-          )}
-
           <Card>
             <CardHeader>
-              <CardTitle>Validator</CardTitle>
-              <CardDescription>
-                Enter a ValidatorShare contract address on mainnet
+              <CardTitle>Chorus One Validator</CardTitle>
+              <CardDescription className="font-mono text-xs break-all">
+                {VALIDATOR_SHARE}
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2">
-              <Input
-                placeholder="0x... ValidatorShare address"
-                value={validatorShare}
-                onChange={(e) => setValidatorShare(e.target.value)}
-              />
-              <Button
-                onClick={refresh}
-                disabled={!validatorShare}
-                variant="outline"
-                className="w-full"
-              >
-                Load Info
+            <CardContent>
+              <Button onClick={refresh} variant="outline" className="w-full">
+                Load Staking Info
               </Button>
             </CardContent>
           </Card>
@@ -262,9 +229,10 @@ export default function Home() {
                 <CardTitle>Staking Info</CardTitle>
               </CardHeader>
               <CardContent className="space-y-1 text-sm font-mono">
-                <p>Total Staked: {info.totalStaked}</p>
-                <p>Pending Rewards: {info.rewards}</p>
-                <p>Allowance: {info.allowance}</p>
+                <p>Total Staked: {info.totalStaked} POL</p>
+                <p>Shares: {info.shares}</p>
+                <p>Pending Rewards: {info.rewards} POL</p>
+                <p>Allowance: {info.allowance} POL</p>
                 <p>Unbond Nonce: {info.unbondNonce}</p>
                 <p>Current Epoch: {info.epoch}</p>
               </CardContent>
@@ -289,37 +257,29 @@ export default function Home() {
               <div className="grid grid-cols-2 gap-2">
                 <Button
                   onClick={approveAndStake}
-                  disabled={loading || !amount || !validatorShare}
+                  disabled={loading || !amount}
                   className="col-span-2"
                 >
                   Approve &amp; Stake
                 </Button>
                 <Button
                   onClick={unstake}
-                  disabled={loading || !amount || !validatorShare}
+                  disabled={loading || !amount}
                   variant="secondary"
                 >
                   Unstake
                 </Button>
-                <Button
-                  onClick={withdraw}
-                  disabled={loading || !validatorShare}
-                  variant="secondary"
-                >
+                <Button onClick={withdraw} disabled={loading} variant="secondary">
                   Withdraw
                 </Button>
                 <Button
                   onClick={claimRewards}
-                  disabled={loading || !validatorShare}
+                  disabled={loading}
                   variant="outline"
                 >
                   Claim Rewards
                 </Button>
-                <Button
-                  onClick={compound}
-                  disabled={loading || !validatorShare}
-                  variant="outline"
-                >
+                <Button onClick={compound} disabled={loading} variant="outline">
                   Compound
                 </Button>
               </div>
