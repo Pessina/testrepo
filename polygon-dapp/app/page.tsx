@@ -2,7 +2,7 @@
 
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
-import { formatEther, type Address } from "viem";
+import { formatEther, parseEther, type Address } from "viem";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -117,11 +117,12 @@ export default function Home() {
       if (!staker || !address) return;
 
       const allowance = await staker.getAllowance(address);
-      const requiredAllowance = BigInt(Math.ceil(parseFloat(amount) * 1e18));
+      const requiredAllowance = parseEther(amount);
 
       if (allowance < requiredAllowance) {
         setStatus("Approving POL...");
         const { tx: approveTx } = await staker.buildApproveTx({ amount });
+        console.log("Approve tx:", approveTx);
         await sendTx(approveTx);
       }
 
@@ -131,6 +132,7 @@ export default function Home() {
         validatorShareAddress: VALIDATOR_SHARE,
         amount,
       });
+      console.log("Stake tx:", stakeTx);
       await sendTx(stakeTx);
     });
 
@@ -143,6 +145,7 @@ export default function Home() {
         validatorShareAddress: VALIDATOR_SHARE,
         amount,
       });
+      console.log("Unstake tx:", tx);
       await sendTx(tx);
     });
 
@@ -175,6 +178,7 @@ export default function Home() {
         validatorShareAddress: VALIDATOR_SHARE,
         unbondNonce,
       });
+      console.log("Withdraw tx:", tx);
       await sendTx(tx);
     });
 
@@ -186,6 +190,7 @@ export default function Home() {
         delegatorAddress: address,
         validatorShareAddress: VALIDATOR_SHARE,
       });
+      console.log("Claim rewards tx:", tx);
       await sendTx(tx);
     });
 
@@ -197,6 +202,7 @@ export default function Home() {
         delegatorAddress: address,
         validatorShareAddress: VALIDATOR_SHARE,
       });
+      console.log("Compound tx:", tx);
       await sendTx(tx);
     });
 
