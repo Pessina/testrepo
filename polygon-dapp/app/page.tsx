@@ -17,9 +17,11 @@ import {
   ERC20_ABI,
   VALIDATOR_SHARE_ABI,
   STAKE_MANAGER_ABI,
-  TESTNET_POL_TOKEN,
-  TESTNET_STAKE_MANAGER,
+  NETWORK_CONTRACTS,
 } from "@/lib/contracts";
+
+const { stakingTokenAddress: POL_TOKEN, stakeManagerAddress: STAKE_MANAGER } =
+  NETWORK_CONTRACTS.mainnet;
 
 type StakeInfo = {
   totalStaked: string;
@@ -58,7 +60,7 @@ export default function Home() {
   const fetchPolBalance = useCallback(async () => {
     if (!address || !publicClient) return;
     const balance = await publicClient.readContract({
-      address: TESTNET_POL_TOKEN,
+      address: POL_TOKEN,
       abi: ERC20_ABI,
       functionName: "balanceOf",
       args: [address],
@@ -88,10 +90,10 @@ export default function Home() {
             args: [address],
           }),
           publicClient.readContract({
-            address: TESTNET_POL_TOKEN,
+            address: POL_TOKEN,
             abi: ERC20_ABI,
             functionName: "allowance",
-            args: [address, TESTNET_STAKE_MANAGER],
+            args: [address, STAKE_MANAGER],
           }),
           publicClient.readContract({
             address: vsAddr,
@@ -100,7 +102,7 @@ export default function Home() {
             args: [address],
           }),
           publicClient.readContract({
-            address: TESTNET_STAKE_MANAGER,
+            address: STAKE_MANAGER,
             abi: STAKE_MANAGER_ABI,
             functionName: "epoch",
           }),
@@ -137,19 +139,19 @@ export default function Home() {
       const amountWei = parseEther(amount);
 
       const allowance = await publicClient.readContract({
-        address: TESTNET_POL_TOKEN,
+        address: POL_TOKEN,
         abi: ERC20_ABI,
         functionName: "allowance",
-        args: [address!, TESTNET_STAKE_MANAGER],
+        args: [address!, STAKE_MANAGER],
       });
 
       if (allowance < amountWei) {
         setStatus("Approving POL...");
         const approveHash = await walletClient.writeContract({
-          address: TESTNET_POL_TOKEN,
+          address: POL_TOKEN,
           abi: ERC20_ABI,
           functionName: "approve",
-          args: [TESTNET_STAKE_MANAGER, amountWei],
+          args: [STAKE_MANAGER, amountWei],
         });
         await waitForTx(approveHash);
       }
@@ -220,7 +222,7 @@ export default function Home() {
   return (
     <main className="mx-auto max-w-lg space-y-4 p-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">POL Staking (Sepolia)</h1>
+        <h1 className="text-xl font-bold">POL Staking (Mainnet)</h1>
         <ConnectButton />
       </div>
 
@@ -234,7 +236,7 @@ export default function Home() {
             <CardHeader>
               <CardTitle>Validator</CardTitle>
               <CardDescription>
-                Enter a ValidatorShare contract address on Sepolia
+                Enter a ValidatorShare contract address on mainnet
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
