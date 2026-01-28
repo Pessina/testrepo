@@ -1,65 +1,334 @@
-import Image from "next/image";
+"use client";
+
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { useAccount, usePublicClient, useWalletClient } from "wagmi";
+import { parseEther, formatEther, type Address } from "viem";
+import { useState, useCallback, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  ERC20_ABI,
+  VALIDATOR_SHARE_ABI,
+  STAKE_MANAGER_ABI,
+  TESTNET_POL_TOKEN,
+  TESTNET_STAKE_MANAGER,
+} from "@/lib/contracts";
+
+type StakeInfo = {
+  totalStaked: string;
+  rewards: string;
+  allowance: string;
+  unbondNonce: string;
+  epoch: string;
+};
 
 export default function Home() {
+  const { address } = useAccount();
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
+
+  const [validatorShare, setValidatorShare] = useState("");
+  const [amount, setAmount] = useState("");
+  const [info, setInfo] = useState<StakeInfo | null>(null);
+  const [polBalance, setPolBalance] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
+
+  const vsAddr = validatorShare as Address;
+
+  const waitForTx = useCallback(
+    async (hash: `0x${string}`) => {
+      if (!publicClient) return;
+      setStatus(`Tx sent: ${hash.slice(0, 10)}... waiting...`);
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      setStatus(
+        `Tx ${receipt.status === "success" ? "confirmed" : "failed"}: ${hash.slice(0, 10)}...`
+      );
+    },
+    [publicClient]
+  );
+
+  const fetchPolBalance = useCallback(async () => {
+    if (!address || !publicClient) return;
+    const balance = await publicClient.readContract({
+      address: TESTNET_POL_TOKEN,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [address],
+    });
+    setPolBalance(formatEther(balance));
+  }, [address, publicClient]);
+
+  useEffect(() => {
+    fetchPolBalance();
+  }, [fetchPolBalance]);
+
+  const refresh = useCallback(async () => {
+    if (!address || !publicClient || !validatorShare) return;
+    try {
+      const [stakeResult, rewards, allowance, nonce, epoch] =
+        await Promise.all([
+          publicClient.readContract({
+            address: vsAddr,
+            abi: VALIDATOR_SHARE_ABI,
+            functionName: "getTotalStake",
+            args: [address],
+          }),
+          publicClient.readContract({
+            address: vsAddr,
+            abi: VALIDATOR_SHARE_ABI,
+            functionName: "getLiquidRewards",
+            args: [address],
+          }),
+          publicClient.readContract({
+            address: TESTNET_POL_TOKEN,
+            abi: ERC20_ABI,
+            functionName: "allowance",
+            args: [address, TESTNET_STAKE_MANAGER],
+          }),
+          publicClient.readContract({
+            address: vsAddr,
+            abi: VALIDATOR_SHARE_ABI,
+            functionName: "unbondNonces",
+            args: [address],
+          }),
+          publicClient.readContract({
+            address: TESTNET_STAKE_MANAGER,
+            abi: STAKE_MANAGER_ABI,
+            functionName: "epoch",
+          }),
+        ]);
+
+      setInfo({
+        totalStaked: formatEther(stakeResult[0]),
+        rewards: formatEther(rewards),
+        allowance: formatEther(allowance),
+        unbondNonce: nonce.toString(),
+        epoch: epoch.toString(),
+      });
+      await fetchPolBalance();
+    } catch (e) {
+      setStatus(`Error reading state: ${e instanceof Error ? e.message : e}`);
+    }
+  }, [address, publicClient, validatorShare, vsAddr, fetchPolBalance]);
+
+  const exec = async (fn: () => Promise<void>) => {
+    setLoading(true);
+    try {
+      await fn();
+      await refresh();
+    } catch (e) {
+      setStatus(`Error: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const approveAndStake = () =>
+    exec(async () => {
+      if (!walletClient || !publicClient) return;
+      const amountWei = parseEther(amount);
+
+      const allowance = await publicClient.readContract({
+        address: TESTNET_POL_TOKEN,
+        abi: ERC20_ABI,
+        functionName: "allowance",
+        args: [address!, TESTNET_STAKE_MANAGER],
+      });
+
+      if (allowance < amountWei) {
+        setStatus("Approving POL...");
+        const approveHash = await walletClient.writeContract({
+          address: TESTNET_POL_TOKEN,
+          abi: ERC20_ABI,
+          functionName: "approve",
+          args: [TESTNET_STAKE_MANAGER, amountWei],
+        });
+        await waitForTx(approveHash);
+      }
+
+      setStatus("Staking POL...");
+      const stakeHash = await walletClient.writeContract({
+        address: vsAddr,
+        abi: VALIDATOR_SHARE_ABI,
+        functionName: "buyVoucherPOL",
+        args: [amountWei, 0n],
+      });
+      await waitForTx(stakeHash);
+    });
+
+  const unstake = () =>
+    exec(async () => {
+      if (!walletClient) return;
+      const amountWei = parseEther(amount);
+      const hash = await walletClient.writeContract({
+        address: vsAddr,
+        abi: VALIDATOR_SHARE_ABI,
+        functionName: "sellVoucher_newPOL",
+        args: [amountWei, amountWei],
+      });
+      await waitForTx(hash);
+    });
+
+  const withdraw = () =>
+    exec(async () => {
+      if (!walletClient || !publicClient) return;
+      const nonce = await publicClient.readContract({
+        address: vsAddr,
+        abi: VALIDATOR_SHARE_ABI,
+        functionName: "unbondNonces",
+        args: [address!],
+      });
+      const hash = await walletClient.writeContract({
+        address: vsAddr,
+        abi: VALIDATOR_SHARE_ABI,
+        functionName: "unstakeClaimTokens_newPOL",
+        args: [nonce],
+      });
+      await waitForTx(hash);
+    });
+
+  const claimRewards = () =>
+    exec(async () => {
+      if (!walletClient) return;
+      const hash = await walletClient.writeContract({
+        address: vsAddr,
+        abi: VALIDATOR_SHARE_ABI,
+        functionName: "withdrawRewardsPOL",
+      });
+      await waitForTx(hash);
+    });
+
+  const compound = () =>
+    exec(async () => {
+      if (!walletClient) return;
+      const hash = await walletClient.writeContract({
+        address: vsAddr,
+        abi: VALIDATOR_SHARE_ABI,
+        functionName: "restakePOL",
+      });
+      await waitForTx(hash);
+    });
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <main className="mx-auto max-w-lg space-y-4 p-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-bold">POL Staking (Sepolia)</h1>
+        <ConnectButton />
+      </div>
+
+      {address && (
+        <>
+          {polBalance !== null && (
+            <p className="text-sm font-mono">POL Balance: {polBalance}</p>
+          )}
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Validator</CardTitle>
+              <CardDescription>
+                Enter a ValidatorShare contract address on Sepolia
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Input
+                placeholder="0x... ValidatorShare address"
+                value={validatorShare}
+                onChange={(e) => setValidatorShare(e.target.value)}
+              />
+              <Button
+                onClick={refresh}
+                disabled={!validatorShare}
+                variant="outline"
+                className="w-full"
+              >
+                Load Info
+              </Button>
+            </CardContent>
+          </Card>
+
+          {info && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Staking Info</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1 text-sm font-mono">
+                <p>Total Staked: {info.totalStaked}</p>
+                <p>Pending Rewards: {info.rewards}</p>
+                <p>Allowance: {info.allowance}</p>
+                <p>Unbond Nonce: {info.unbondNonce}</p>
+                <p>Current Epoch: {info.epoch}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Actions</CardTitle>
+              <CardDescription>
+                Full staking lifecycle: Stake &rarr; Unstake &rarr; Withdraw
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Input
+                placeholder="Amount (POL)"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                type="number"
+                step="0.01"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  onClick={approveAndStake}
+                  disabled={loading || !amount || !validatorShare}
+                  className="col-span-2"
+                >
+                  Approve &amp; Stake
+                </Button>
+                <Button
+                  onClick={unstake}
+                  disabled={loading || !amount || !validatorShare}
+                  variant="secondary"
+                >
+                  Unstake
+                </Button>
+                <Button
+                  onClick={withdraw}
+                  disabled={loading || !validatorShare}
+                  variant="secondary"
+                >
+                  Withdraw
+                </Button>
+                <Button
+                  onClick={claimRewards}
+                  disabled={loading || !validatorShare}
+                  variant="outline"
+                >
+                  Claim Rewards
+                </Button>
+                <Button
+                  onClick={compound}
+                  disabled={loading || !validatorShare}
+                  variant="outline"
+                >
+                  Compound
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {status && (
+            <p className="text-xs text-muted-foreground break-all">{status}</p>
+          )}
+        </>
+      )}
+    </main>
   );
 }
