@@ -2,7 +2,7 @@
 
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
-import { formatEther, parseEther, type Address } from "viem";
+import { formatEther, parseEther, maxUint256, type Address } from "viem";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,12 +16,15 @@ import {
 import { PolygonStaker } from "@chorus-one/polygon";
 
 const VALIDATOR_SHARE = "0x91344055cb0511b3aa36c561d741ee356b95f1c9" as const;
+const WITHDRAWAL_DELAY = 80n;
 
 type StakeInfo = {
   totalStaked: string;
   shares: string;
   rewards: string;
   allowance: string;
+  unbonding: string;
+  withdrawable: string;
   unbondNonce: string;
   epoch: string;
 };
@@ -87,11 +90,33 @@ export default function Home() {
         staker.getEpoch(),
       ]);
 
+      let unbonding = 0n;
+      let withdrawable = 0n;
+
+      // Check all unbond requests
+      // Withdrawal condition: epoch >= withdrawEpoch + WITHDRAWAL_DELAY
+      for (let i = 1n; i <= nonce; i++) {
+        const unbond = await staker.getUnbond({
+          delegatorAddress: address,
+          validatorShareAddress: VALIDATOR_SHARE,
+          unbondNonce: i,
+        });
+        if (unbond.shares > 0n) {
+          if (epoch >= unbond.withdrawEpoch + WITHDRAWAL_DELAY) {
+            withdrawable += unbond.shares;
+          } else {
+            unbonding += unbond.shares;
+          }
+        }
+      }
+
       setInfo({
         totalStaked: formatEther(stakeInfo.totalStaked),
-        shares: stakeInfo.shares.toString(),
+        shares: formatEther(stakeInfo.shares),
         rewards: formatEther(rewards),
-        allowance: formatEther(allowance),
+        allowance: allowance >= maxUint256 / 2n ? "Unlimited" : formatEther(allowance),
+        unbonding: formatEther(unbonding),
+        withdrawable: formatEther(withdrawable),
         unbondNonce: nonce.toString(),
         epoch: epoch.toString(),
       });
@@ -238,7 +263,9 @@ export default function Home() {
                 <p>Total Staked: {info.totalStaked} POL</p>
                 <p>Shares: {info.shares}</p>
                 <p>Pending Rewards: {info.rewards} POL</p>
-                <p>Allowance: {info.allowance} POL</p>
+                <p>Unbonding: {info.unbonding} POL</p>
+                <p>Withdrawable: {info.withdrawable} POL</p>
+                <p>Allowance: {info.allowance}{info.allowance !== "Unlimited" && " POL"}</p>
                 <p>Unbond Nonce: {info.unbondNonce}</p>
                 <p>Current Epoch: {info.epoch}</p>
               </CardContent>
