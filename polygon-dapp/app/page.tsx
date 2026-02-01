@@ -13,9 +13,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { PolygonStaker, CHORUS_ONE_POLYGON_VALIDATORS } from "@chorus-one/polygon";
+import { PolygonStaker } from "@chorus-one/polygon";
 
-const VALIDATOR_SHARE = CHORUS_ONE_POLYGON_VALIDATORS.mainnet;
+const VALIDATOR_SHARE = "0x91344055cb0511b3aa36c561d741ee356b95f1c9" as const;
 
 type StakeInfo = {
   totalStaked: string;
@@ -38,7 +38,7 @@ export default function Home() {
   const [status, setStatus] = useState("");
 
   useEffect(() => {
-    const instance = new PolygonStaker({ network: "mainnet" });
+    const instance = new PolygonStaker({ network: "testnet" });
     setStaker(instance);
   }, []);
 
@@ -209,7 +209,7 @@ export default function Home() {
   return (
     <main className="mx-auto max-w-lg space-y-4 p-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">POL Staking (Mainnet)</h1>
+        <h1 className="text-xl font-bold">POL Staking (Sepolia Testnet)</h1>
         <ConnectButton />
       </div>
 
@@ -217,7 +217,7 @@ export default function Home() {
         <>
           <Card>
             <CardHeader>
-              <CardTitle>Chorus One Validator</CardTitle>
+              <CardTitle>Testnet Validator</CardTitle>
               <CardDescription className="font-mono text-xs break-all">
                 {VALIDATOR_SHARE}
               </CardDescription>

@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Polygon Staking Demo",
-  description: "Minimal POL staking dApp on Ethereum mainnet",
+  description: "Minimal POL staking dApp on Sepolia testnet",
 };
 
 export default function RootLayout({
