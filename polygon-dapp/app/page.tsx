@@ -1,8 +1,20 @@
 "use client";
 
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount, usePublicClient, useWalletClient, useSwitchChain, useBalance } from "wagmi";
-import { parseEther, maxUint256, formatEther, type Address } from "viem";
+import {
+  useAccount,
+  usePublicClient,
+  useWalletClient,
+  useSwitchChain,
+  useBalance,
+} from "wagmi";
+import {
+  parseEther,
+  maxUint256,
+  formatEther,
+  type Address,
+  parseUnits,
+} from "viem";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -73,23 +85,24 @@ export default function Home() {
     queryFn: async () => {
       if (!address) throw new Error("No address");
 
-      const [stakeInfo, rewards, allowance, nonce, epoch, withdrawalDelay] = await Promise.all([
-        staker.getStake({
-          delegatorAddress: address,
-          validatorShareAddress: validatorShare,
-        }),
-        staker.getLiquidRewards({
-          delegatorAddress: address,
-          validatorShareAddress: validatorShare,
-        }),
-        staker.getAllowance(address),
-        staker.getUnbondNonce({
-          delegatorAddress: address,
-          validatorShareAddress: validatorShare,
-        }),
-        staker.getEpoch(),
-        staker.getWithdrawalDelay(),
-      ]);
+      const [stakeInfo, rewards, allowance, nonce, epoch, withdrawalDelay] =
+        await Promise.all([
+          staker.getStake({
+            delegatorAddress: address,
+            validatorShareAddress: validatorShare,
+          }),
+          staker.getLiquidRewards({
+            delegatorAddress: address,
+            validatorShareAddress: validatorShare,
+          }),
+          staker.getAllowance(address),
+          staker.getUnbondNonce({
+            delegatorAddress: address,
+            validatorShareAddress: validatorShare,
+          }),
+          staker.getEpoch(),
+          staker.getWithdrawalDelay(),
+        ]);
 
       const { exchangeRate } = stakeInfo;
       const unbonds: UnbondItem[] = [];
@@ -103,7 +116,8 @@ export default function Home() {
           unbondNonce: i,
         });
         if (unbond.shares > 0n) {
-          const isWithdrawable = epoch >= unbond.withdrawEpoch + withdrawalDelay;
+          const isWithdrawable =
+            epoch >= unbond.withdrawEpoch + withdrawalDelay;
           if (isWithdrawable) {
             withdrawableShares += unbond.shares;
           } else {
@@ -123,7 +137,10 @@ export default function Home() {
       return {
         staked: stakeInfo.balance,
         rewards,
-        allowance: allowanceNum >= parseFloat(String(maxUint256 / 2n)) ? "Unlimited" : allowance,
+        allowance:
+          allowanceNum >= parseFloat(String(maxUint256 / 2n))
+            ? "Unlimited"
+            : allowance,
         unbonding: sharesToPol(unbondingShares, exchangeRate),
         withdrawable: sharesToPol(withdrawableShares, exchangeRate),
         unbonds,
@@ -146,7 +163,9 @@ export default function Home() {
     setStatus(`Tx sent: ${hash.slice(0, 10)}... waiting...`);
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     setStatus(
-      `Tx ${receipt.status === "success" ? "confirmed" : "failed"}: ${hash.slice(0, 10)}...`
+      `Tx ${
+        receipt.status === "success" ? "confirmed" : "failed"
+      }: ${hash.slice(0, 10)}...`
     );
   };
 
@@ -211,7 +230,7 @@ export default function Home() {
         delegatorAddress: address,
         validatorShareAddress: validatorShare,
         amount,
-        maximumSharesToBurn: maxUint256,
+        maximumSharesToBurn: parseUnits(amount, 18),
       });
       console.log("Unstake tx:", tx);
       await sendTx(tx);
@@ -261,14 +280,24 @@ export default function Home() {
         <h1 className="text-xl font-bold">POL Staking</h1>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 text-sm">
-            <span className={network === "testnet" ? "font-medium" : "text-muted-foreground"}>
+            <span
+              className={
+                network === "testnet" ? "font-medium" : "text-muted-foreground"
+              }
+            >
               Testnet
             </span>
             <Switch
               checked={network === "mainnet"}
-              onCheckedChange={(checked) => setNetwork(checked ? "mainnet" : "testnet")}
+              onCheckedChange={(checked) =>
+                setNetwork(checked ? "mainnet" : "testnet")
+              }
             />
-            <span className={network === "mainnet" ? "font-medium" : "text-muted-foreground"}>
+            <span
+              className={
+                network === "mainnet" ? "font-medium" : "text-muted-foreground"
+              }
+            >
               Mainnet
             </span>
           </div>
@@ -287,7 +316,9 @@ export default function Home() {
             </CardHeader>
             <CardContent className="space-y-2">
               <p className="text-sm">
-                <span className="text-muted-foreground">Wallet POL Balance:</span>{" "}
+                <span className="text-muted-foreground">
+                  Wallet POL Balance:
+                </span>{" "}
                 <span className="font-mono font-medium">
                   {polBalance ? formatEther(polBalance.value) : "0"} POL
                 </span>
@@ -306,7 +337,10 @@ export default function Home() {
                 <p>Pending Rewards: {info.rewards} POL</p>
                 <p>Unbonding: {info.unbonding} POL</p>
                 <p>Withdrawable: {info.withdrawable} POL</p>
-                <p>Allowance: {info.allowance}{info.allowance !== "Unlimited" && " POL"}</p>
+                <p>
+                  Allowance: {info.allowance}
+                  {info.allowance !== "Unlimited" && " POL"}
+                </p>
                 <p>Current Epoch: {info.epoch}</p>
                 <p>Withdrawal Delay: {info.withdrawalDelay} epochs</p>
               </CardContent>
@@ -327,10 +361,7 @@ export default function Home() {
                 step="0.01"
               />
               <div className="grid grid-cols-2 gap-2">
-                <Button
-                  onClick={approveAndStake}
-                  disabled={loading || !amount}
-                >
+                <Button onClick={approveAndStake} disabled={loading || !amount}>
                   Approve &amp; Stake
                 </Button>
                 <Button
@@ -348,7 +379,9 @@ export default function Home() {
             <Card>
               <CardHeader>
                 <CardTitle>Withdrawals</CardTitle>
-                <CardDescription>Withdraw each unbond individually</CardDescription>
+                <CardDescription>
+                  Withdraw each unbond individually
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
                 {info.unbonds.map((unbond) => (
@@ -359,14 +392,27 @@ export default function Home() {
                     <div className="text-sm font-mono">
                       <p className="font-medium">{unbond.amount} POL</p>
                       <p className="text-xs">
-                        <span className="text-muted-foreground">Nonce #{unbond.nonce.toString()}</span>
+                        <span className="text-muted-foreground">
+                          Nonce #{unbond.nonce.toString()}
+                        </span>
                         {" · "}
-                        <span className={unbond.isWithdrawable ? "text-green-600" : "text-yellow-600"}>
+                        <span
+                          className={
+                            unbond.isWithdrawable
+                              ? "text-green-600"
+                              : "text-yellow-600"
+                          }
+                        >
                           {unbond.isWithdrawable ? "Withdrawable" : "Unbonding"}
                         </span>
                         {!unbond.isWithdrawable && (
                           <span className="text-muted-foreground">
-                            {" "}· Ready at epoch {(BigInt(info.withdrawalDelay) + unbond.withdrawEpoch).toString()}
+                            {" "}
+                            · Ready at epoch{" "}
+                            {(
+                              BigInt(info.withdrawalDelay) +
+                              unbond.withdrawEpoch
+                            ).toString()}
                           </span>
                         )}
                       </p>
@@ -392,7 +438,11 @@ export default function Home() {
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 gap-2">
-                <Button onClick={claimRewards} disabled={loading} variant="outline">
+                <Button
+                  onClick={claimRewards}
+                  disabled={loading}
+                  variant="outline"
+                >
                   Claim Rewards
                 </Button>
                 <Button onClick={compound} disabled={loading} variant="outline">
