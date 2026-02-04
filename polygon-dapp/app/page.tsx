@@ -19,13 +19,20 @@ import { PolygonStaker, NETWORK_CONTRACTS } from "@chorus-one/polygon";
 import { useNetwork } from "@/lib/network-context";
 import { networkConfig } from "@/lib/network";
 
+type UnbondItem = {
+  nonce: bigint;
+  amount: string;
+  withdrawEpoch: bigint;
+  isWithdrawable: boolean;
+};
+
 type StakeInfo = {
   staked: string;
   rewards: string;
   allowance: string;
   unbonding: string;
   withdrawable: string;
-  unbondNonce: string;
+  unbonds: UnbondItem[];
   epoch: string;
   withdrawalDelay: string;
 };
@@ -84,6 +91,8 @@ export default function Home() {
         staker.getWithdrawalDelay(),
       ]);
 
+      const { exchangeRate } = stakeInfo;
+      const unbonds: UnbondItem[] = [];
       let unbondingShares = 0n;
       let withdrawableShares = 0n;
 
@@ -94,16 +103,22 @@ export default function Home() {
           unbondNonce: i,
         });
         if (unbond.shares > 0n) {
-          if (epoch >= unbond.withdrawEpoch + withdrawalDelay) {
+          const isWithdrawable = epoch >= unbond.withdrawEpoch + withdrawalDelay;
+          if (isWithdrawable) {
             withdrawableShares += unbond.shares;
           } else {
             unbondingShares += unbond.shares;
           }
+          unbonds.push({
+            nonce: i,
+            amount: sharesToPol(unbond.shares, exchangeRate),
+            withdrawEpoch: unbond.withdrawEpoch,
+            isWithdrawable,
+          });
         }
       }
 
       const allowanceNum = parseFloat(allowance);
-      const { exchangeRate } = stakeInfo;
 
       return {
         staked: stakeInfo.balance,
@@ -111,7 +126,7 @@ export default function Home() {
         allowance: allowanceNum >= parseFloat(String(maxUint256 / 2n)) ? "Unlimited" : allowance,
         unbonding: sharesToPol(unbondingShares, exchangeRate),
         withdrawable: sharesToPol(withdrawableShares, exchangeRate),
-        unbondNonce: nonce.toString(),
+        unbonds,
         epoch: epoch.toString(),
         withdrawalDelay: withdrawalDelay.toString(),
       };
@@ -202,16 +217,11 @@ export default function Home() {
       await sendTx(tx);
     });
 
-  const withdraw = () =>
+  const withdraw = (unbondNonce: bigint) =>
     exec(async () => {
       if (!staker || !address) return;
 
-      const unbondNonce = await staker.getUnbondNonce({
-        delegatorAddress: address,
-        validatorShareAddress: validatorShare,
-      });
-
-      setStatus("Withdrawing POL...");
+      setStatus(`Withdrawing unbond #${unbondNonce}...`);
       const { tx } = await staker.buildWithdrawTx({
         delegatorAddress: address,
         validatorShareAddress: validatorShare,
@@ -297,7 +307,6 @@ export default function Home() {
                 <p>Unbonding: {info.unbonding} POL</p>
                 <p>Withdrawable: {info.withdrawable} POL</p>
                 <p>Allowance: {info.allowance}{info.allowance !== "Unlimited" && " POL"}</p>
-                <p>Unbond Nonce: {info.unbondNonce}</p>
                 <p>Current Epoch: {info.epoch}</p>
                 <p>Withdrawal Delay: {info.withdrawalDelay} epochs</p>
               </CardContent>
@@ -335,16 +344,54 @@ export default function Home() {
             </CardContent>
           </Card>
 
+          {info && info.unbonds.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Withdrawals</CardTitle>
+                <CardDescription>Withdraw each unbond individually</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {info.unbonds.map((unbond) => (
+                  <div
+                    key={unbond.nonce.toString()}
+                    className="flex items-center justify-between rounded-md border p-3"
+                  >
+                    <div className="text-sm font-mono">
+                      <p className="font-medium">{unbond.amount} POL</p>
+                      <p className="text-xs">
+                        <span className="text-muted-foreground">Nonce #{unbond.nonce.toString()}</span>
+                        {" · "}
+                        <span className={unbond.isWithdrawable ? "text-green-600" : "text-yellow-600"}>
+                          {unbond.isWithdrawable ? "Withdrawable" : "Unbonding"}
+                        </span>
+                        {!unbond.isWithdrawable && (
+                          <span className="text-muted-foreground">
+                            {" "}· Ready at epoch {(BigInt(info.withdrawalDelay) + unbond.withdrawEpoch).toString()}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={unbond.isWithdrawable ? "default" : "outline"}
+                      disabled={loading || !unbond.isWithdrawable}
+                      onClick={() => withdraw(unbond.nonce)}
+                    >
+                      {unbond.isWithdrawable ? "Withdraw" : "Pending"}
+                    </Button>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
-              <CardTitle>Manage</CardTitle>
-              <CardDescription>Withdraw, claim or compound</CardDescription>
+              <CardTitle>Rewards</CardTitle>
+              <CardDescription>Claim or compound your rewards</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-3 gap-2">
-                <Button onClick={withdraw} disabled={loading} variant="secondary">
-                  Withdraw
-                </Button>
+              <div className="grid grid-cols-2 gap-2">
                 <Button onClick={claimRewards} disabled={loading} variant="outline">
                   Claim Rewards
                 </Button>
