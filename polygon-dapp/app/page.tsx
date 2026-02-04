@@ -1,11 +1,13 @@
 "use client";
 
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount, usePublicClient, useWalletClient } from "wagmi";
-import { formatEther, parseEther, maxUint256, type Address } from "viem";
-import { useState, useEffect } from "react";
+import { useAccount, usePublicClient, useWalletClient, useSwitchChain, useBalance } from "wagmi";
+import { parseEther, maxUint256, formatEther, type Address } from "viem";
+import { useState, useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
@@ -13,37 +15,116 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { PolygonStaker } from "@chorus-one/polygon";
-
-const VALIDATOR_SHARE = "0x91344055cb0511b3aa36c561d741ee356b95f1c9" as const;
-const WITHDRAWAL_DELAY = 80n;
+import { PolygonStaker, NETWORK_CONTRACTS } from "@chorus-one/polygon";
+import { useNetwork } from "@/lib/network-context";
+import { networkConfig } from "@/lib/network";
 
 type StakeInfo = {
-  totalStaked: string;
-  shares: string;
+  staked: string;
   rewards: string;
   allowance: string;
   unbonding: string;
   withdrawable: string;
   unbondNonce: string;
   epoch: string;
+  withdrawalDelay: string;
 };
 
+const EXCHANGE_RATE_PRECISION = 10n ** 29n;
+
+function sharesToPol(shares: bigint, exchangeRate: bigint): string {
+  if (shares === 0n || exchangeRate === 0n) return "0";
+  const polWei = (shares * exchangeRate) / EXCHANGE_RATE_PRECISION;
+  return formatEther(polWei);
+}
+
 export default function Home() {
-  const { address } = useAccount();
+  const { address, chainId } = useAccount();
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
+  const { switchChain } = useSwitchChain();
+  const { network, setNetwork } = useNetwork();
 
-  const [staker, setStaker] = useState<PolygonStaker | null>(null);
   const [amount, setAmount] = useState("");
-  const [info, setInfo] = useState<StakeInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
+  const currentConfig = networkConfig[network];
+  const validatorShare = currentConfig.validatorShare;
+  const stakingTokenAddress = NETWORK_CONTRACTS[network].stakingTokenAddress;
+
+  const staker = useMemo(() => new PolygonStaker({ network }), [network]);
+
+  const { data: polBalance } = useBalance({
+    address,
+    token: stakingTokenAddress,
+    query: { refetchInterval: 10000 },
+  });
+
+  const { data: info, refetch } = useQuery<StakeInfo>({
+    queryKey: ["stakingInfo", network, address, validatorShare],
+    queryFn: async () => {
+      if (!address) throw new Error("No address");
+
+      const [stakeInfo, rewards, allowance, nonce, epoch, withdrawalDelay] = await Promise.all([
+        staker.getStake({
+          delegatorAddress: address,
+          validatorShareAddress: validatorShare,
+        }),
+        staker.getLiquidRewards({
+          delegatorAddress: address,
+          validatorShareAddress: validatorShare,
+        }),
+        staker.getAllowance(address),
+        staker.getUnbondNonce({
+          delegatorAddress: address,
+          validatorShareAddress: validatorShare,
+        }),
+        staker.getEpoch(),
+        staker.getWithdrawalDelay(),
+      ]);
+
+      let unbondingShares = 0n;
+      let withdrawableShares = 0n;
+
+      for (let i = 1n; i <= nonce; i++) {
+        const unbond = await staker.getUnbond({
+          delegatorAddress: address,
+          validatorShareAddress: validatorShare,
+          unbondNonce: i,
+        });
+        if (unbond.shares > 0n) {
+          if (epoch >= unbond.withdrawEpoch + withdrawalDelay) {
+            withdrawableShares += unbond.shares;
+          } else {
+            unbondingShares += unbond.shares;
+          }
+        }
+      }
+
+      const allowanceNum = parseFloat(allowance);
+      const { exchangeRate } = stakeInfo;
+
+      return {
+        staked: stakeInfo.balance,
+        rewards,
+        allowance: allowanceNum >= parseFloat(String(maxUint256 / 2n)) ? "Unlimited" : allowance,
+        unbonding: sharesToPol(unbondingShares, exchangeRate),
+        withdrawable: sharesToPol(withdrawableShares, exchangeRate),
+        unbondNonce: nonce.toString(),
+        epoch: epoch.toString(),
+        withdrawalDelay: withdrawalDelay.toString(),
+      };
+    },
+    enabled: !!address,
+    refetchInterval: 15000,
+  });
+
   useEffect(() => {
-    const instance = new PolygonStaker({ network: "testnet" });
-    setStaker(instance);
-  }, []);
+    if (chainId && chainId !== currentConfig.chain.id) {
+      switchChain({ chainId: currentConfig.chain.id });
+    }
+  }, [network, chainId, currentConfig.chain.id, switchChain]);
 
   const waitForTx = async (hash: `0x${string}`) => {
     if (!publicClient) return;
@@ -57,79 +138,24 @@ export default function Home() {
   const sendTx = async (tx: {
     to: Address;
     data: `0x${string}`;
-    value: bigint;
+    value?: bigint;
   }) => {
     if (!walletClient || !address) throw new Error("Wallet not connected");
     const hash = await walletClient.sendTransaction({
       to: tx.to,
       data: tx.data,
-      value: tx.value,
+      value: tx.value ?? 0n,
       account: address,
       chain: walletClient.chain,
     });
     await waitForTx(hash);
   };
 
-  const refresh = async () => {
-    if (!address || !staker) return;
-    try {
-      const [stakeInfo, rewards, allowance, nonce, epoch] = await Promise.all([
-        staker.getStake({
-          delegatorAddress: address,
-          validatorShareAddress: VALIDATOR_SHARE,
-        }),
-        staker.getLiquidRewards({
-          delegatorAddress: address,
-          validatorShareAddress: VALIDATOR_SHARE,
-        }),
-        staker.getAllowance(address),
-        staker.getUnbondNonce({
-          delegatorAddress: address,
-          validatorShareAddress: VALIDATOR_SHARE,
-        }),
-        staker.getEpoch(),
-      ]);
-
-      let unbonding = 0n;
-      let withdrawable = 0n;
-
-      // Check all unbond requests
-      // Withdrawal condition: epoch >= withdrawEpoch + WITHDRAWAL_DELAY
-      for (let i = 1n; i <= nonce; i++) {
-        const unbond = await staker.getUnbond({
-          delegatorAddress: address,
-          validatorShareAddress: VALIDATOR_SHARE,
-          unbondNonce: i,
-        });
-        if (unbond.shares > 0n) {
-          if (epoch >= unbond.withdrawEpoch + WITHDRAWAL_DELAY) {
-            withdrawable += unbond.shares;
-          } else {
-            unbonding += unbond.shares;
-          }
-        }
-      }
-
-      setInfo({
-        totalStaked: formatEther(stakeInfo.totalStaked),
-        shares: formatEther(stakeInfo.shares),
-        rewards: formatEther(rewards),
-        allowance: allowance >= maxUint256 / 2n ? "Unlimited" : formatEther(allowance),
-        unbonding: formatEther(unbonding),
-        withdrawable: formatEther(withdrawable),
-        unbondNonce: nonce.toString(),
-        epoch: epoch.toString(),
-      });
-    } catch (e) {
-      setStatus(`Error reading state: ${e instanceof Error ? e.message : e}`);
-    }
-  };
-
   const exec = async (fn: () => Promise<void>) => {
     setLoading(true);
     try {
       await fn();
-      await refresh();
+      await refetch();
     } catch (e) {
       setStatus(`Error: ${e instanceof Error ? e.message : e}`);
     } finally {
@@ -144,7 +170,7 @@ export default function Home() {
       const allowance = await staker.getAllowance(address);
       const requiredAllowance = parseEther(amount);
 
-      if (allowance < requiredAllowance) {
+      if (parseEther(allowance) < requiredAllowance) {
         setStatus("Approving POL...");
         const { tx: approveTx } = await staker.buildApproveTx({ amount });
         console.log("Approve tx:", approveTx);
@@ -154,8 +180,9 @@ export default function Home() {
       setStatus("Staking POL...");
       const { tx: stakeTx } = await staker.buildStakeTx({
         delegatorAddress: address,
-        validatorShareAddress: VALIDATOR_SHARE,
+        validatorShareAddress: validatorShare,
         amount,
+        minSharesToMint: 0n,
       });
       console.log("Stake tx:", stakeTx);
       await sendTx(stakeTx);
@@ -167,8 +194,9 @@ export default function Home() {
       setStatus("Unstaking POL...");
       const { tx } = await staker.buildUnstakeTx({
         delegatorAddress: address,
-        validatorShareAddress: VALIDATOR_SHARE,
+        validatorShareAddress: validatorShare,
         amount,
+        maximumSharesToBurn: maxUint256,
       });
       console.log("Unstake tx:", tx);
       await sendTx(tx);
@@ -180,27 +208,13 @@ export default function Home() {
 
       const unbondNonce = await staker.getUnbondNonce({
         delegatorAddress: address,
-        validatorShareAddress: VALIDATOR_SHARE,
+        validatorShareAddress: validatorShare,
       });
-
-      const unbond = await staker.getUnbond({
-        delegatorAddress: address,
-        validatorShareAddress: VALIDATOR_SHARE,
-        unbondNonce,
-      });
-
-      const currentEpoch = await staker.getEpoch();
-      if (currentEpoch < unbond.withdrawEpoch) {
-        setStatus(
-          `Unbonding not complete. Current epoch: ${currentEpoch}, Withdraw epoch: ${unbond.withdrawEpoch}`
-        );
-        return;
-      }
 
       setStatus("Withdrawing POL...");
       const { tx } = await staker.buildWithdrawTx({
         delegatorAddress: address,
-        validatorShareAddress: VALIDATOR_SHARE,
+        validatorShareAddress: validatorShare,
         unbondNonce,
       });
       console.log("Withdraw tx:", tx);
@@ -213,7 +227,7 @@ export default function Home() {
       setStatus("Claiming rewards...");
       const { tx } = await staker.buildClaimRewardsTx({
         delegatorAddress: address,
-        validatorShareAddress: VALIDATOR_SHARE,
+        validatorShareAddress: validatorShare,
       });
       console.log("Claim rewards tx:", tx);
       await sendTx(tx);
@@ -225,32 +239,49 @@ export default function Home() {
       setStatus("Compounding rewards...");
       const { tx } = await staker.buildCompoundTx({
         delegatorAddress: address,
-        validatorShareAddress: VALIDATOR_SHARE,
+        validatorShareAddress: validatorShare,
       });
       console.log("Compound tx:", tx);
       await sendTx(tx);
     });
 
   return (
-    <main className="mx-auto max-w-lg space-y-4 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">POL Staking (Sepolia Testnet)</h1>
-        <ConnectButton />
+    <main className="mx-auto max-w-3xl space-y-4 p-6">
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-xl font-bold">POL Staking</h1>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 text-sm">
+            <span className={network === "testnet" ? "font-medium" : "text-muted-foreground"}>
+              Testnet
+            </span>
+            <Switch
+              checked={network === "mainnet"}
+              onCheckedChange={(checked) => setNetwork(checked ? "mainnet" : "testnet")}
+            />
+            <span className={network === "mainnet" ? "font-medium" : "text-muted-foreground"}>
+              Mainnet
+            </span>
+          </div>
+          <ConnectButton />
+        </div>
       </div>
 
-      {address && staker && (
+      {address && (
         <>
           <Card>
             <CardHeader>
-              <CardTitle>Testnet Validator</CardTitle>
+              <CardTitle>{currentConfig.label} Validator</CardTitle>
               <CardDescription className="font-mono text-xs break-all">
-                {VALIDATOR_SHARE}
+                {validatorShare}
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <Button onClick={refresh} variant="outline" className="w-full">
-                Load Staking Info
-              </Button>
+            <CardContent className="space-y-2">
+              <p className="text-sm">
+                <span className="text-muted-foreground">Wallet POL Balance:</span>{" "}
+                <span className="font-mono font-medium">
+                  {polBalance ? formatEther(polBalance.value) : "0"} POL
+                </span>
+              </p>
             </CardContent>
           </Card>
 
@@ -258,26 +289,25 @@ export default function Home() {
             <Card>
               <CardHeader>
                 <CardTitle>Staking Info</CardTitle>
+                <CardDescription>Auto-refreshes every 15s</CardDescription>
               </CardHeader>
               <CardContent className="space-y-1 text-sm font-mono">
-                <p>Total Staked: {info.totalStaked} POL</p>
-                <p>Shares: {info.shares}</p>
+                <p>Staked: {info.staked} POL</p>
                 <p>Pending Rewards: {info.rewards} POL</p>
                 <p>Unbonding: {info.unbonding} POL</p>
                 <p>Withdrawable: {info.withdrawable} POL</p>
                 <p>Allowance: {info.allowance}{info.allowance !== "Unlimited" && " POL"}</p>
                 <p>Unbond Nonce: {info.unbondNonce}</p>
                 <p>Current Epoch: {info.epoch}</p>
+                <p>Withdrawal Delay: {info.withdrawalDelay} epochs</p>
               </CardContent>
             </Card>
           )}
 
           <Card>
             <CardHeader>
-              <CardTitle>Actions</CardTitle>
-              <CardDescription>
-                Full staking lifecycle: Stake &rarr; Unstake &rarr; Withdraw
-              </CardDescription>
+              <CardTitle>Stake / Unstake</CardTitle>
+              <CardDescription>Enter amount in POL</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <Input
@@ -291,7 +321,6 @@ export default function Home() {
                 <Button
                   onClick={approveAndStake}
                   disabled={loading || !amount}
-                  className="col-span-2"
                 >
                   Approve &amp; Stake
                 </Button>
@@ -302,14 +331,21 @@ export default function Home() {
                 >
                   Unstake
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Manage</CardTitle>
+              <CardDescription>Withdraw, claim or compound</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-3 gap-2">
                 <Button onClick={withdraw} disabled={loading} variant="secondary">
                   Withdraw
                 </Button>
-                <Button
-                  onClick={claimRewards}
-                  disabled={loading}
-                  variant="outline"
-                >
+                <Button onClick={claimRewards} disabled={loading} variant="outline">
                   Claim Rewards
                 </Button>
                 <Button onClick={compound} disabled={loading} variant="outline">
