@@ -8,13 +8,7 @@ import {
   useSwitchChain,
   useBalance,
 } from "wagmi";
-import {
-  parseEther,
-  maxUint256,
-  formatEther,
-  type Address,
-  parseUnits,
-} from "viem";
+import { parseEther, maxUint256, formatEther, type Address } from "viem";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -27,16 +21,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { PolygonStaker, NETWORK_CONTRACTS } from "@chorus-one/polygon";
+import {
+  PolygonStaker,
+  NETWORK_CONTRACTS,
+  type UnbondInfo,
+} from "@chorus-one/polygon";
 import { useNetwork } from "@/lib/network-context";
 import { networkConfig } from "@/lib/network";
 
-type UnbondItem = {
-  nonce: bigint;
-  amount: string;
-  withdrawEpoch: bigint;
-  isWithdrawable: boolean;
-};
+type UnbondItem = UnbondInfo & { nonce: bigint };
 
 type StakeInfo = {
   staked: string;
@@ -48,14 +41,6 @@ type StakeInfo = {
   epoch: string;
   withdrawalDelay: string;
 };
-
-const EXCHANGE_RATE_PRECISION = 10n ** 29n;
-
-function sharesToPol(shares: bigint, exchangeRate: bigint): string {
-  if (shares === 0n || exchangeRate === 0n) return "0";
-  const polWei = (shares * exchangeRate) / EXCHANGE_RATE_PRECISION;
-  return formatEther(polWei);
-}
 
 export default function Home() {
   const { address, chainId } = useAccount();
@@ -104,45 +89,43 @@ export default function Home() {
           staker.getWithdrawalDelay(),
         ]);
 
-      const { exchangeRate } = stakeInfo;
+      const unbondNonces = Array.from({ length: Number(nonce) }, (_, i) =>
+        BigInt(i + 1),
+      );
+      const unbondResults =
+        unbondNonces.length > 0
+          ? await staker.getUnbonds({
+              delegatorAddress: address,
+              validatorShareAddress: validatorShare,
+              unbondNonces,
+            })
+          : [];
+
       const unbonds: UnbondItem[] = [];
-      let unbondingShares = 0n;
-      let withdrawableShares = 0n;
+      let unbondingAmount = 0;
+      let withdrawableAmount = 0;
 
-      for (let i = 1n; i <= nonce; i++) {
-        const unbond = await staker.getUnbond({
-          delegatorAddress: address,
-          validatorShareAddress: validatorShare,
-          unbondNonce: i,
-        });
+      unbondResults.forEach((unbond, index) => {
         if (unbond.shares > 0n) {
-          const isWithdrawable =
-            epoch >= unbond.withdrawEpoch + withdrawalDelay;
-          if (isWithdrawable) {
-            withdrawableShares += unbond.shares;
+          const amount = parseFloat(unbond.amount);
+          if (unbond.isWithdrawable) {
+            withdrawableAmount += amount;
           } else {
-            unbondingShares += unbond.shares;
+            unbondingAmount += amount;
           }
-          unbonds.push({
-            nonce: i,
-            amount: sharesToPol(unbond.shares, exchangeRate),
-            withdrawEpoch: unbond.withdrawEpoch,
-            isWithdrawable,
-          });
+          unbonds.push({ ...unbond, nonce: unbondNonces[index] });
         }
-      }
+      });
 
-      const allowanceNum = parseFloat(allowance);
+      const allowanceWei = parseEther(allowance);
+      const isUnlimited = allowanceWei >= maxUint256 / 2n;
 
       return {
         staked: stakeInfo.balance,
         rewards,
-        allowance:
-          allowanceNum >= parseFloat(String(maxUint256 / 2n))
-            ? "Unlimited"
-            : allowance,
-        unbonding: sharesToPol(unbondingShares, exchangeRate),
-        withdrawable: sharesToPol(withdrawableShares, exchangeRate),
+        allowance: isUnlimited ? "Unlimited" : allowance,
+        unbonding: unbondingAmount.toString(),
+        withdrawable: withdrawableAmount.toString(),
         unbonds,
         epoch: epoch.toString(),
         withdrawalDelay: withdrawalDelay.toString(),
@@ -165,7 +148,7 @@ export default function Home() {
     setStatus(
       `Tx ${
         receipt.status === "success" ? "confirmed" : "failed"
-      }: ${hash.slice(0, 10)}...`
+      }: ${hash.slice(0, 10)}...`,
     );
   };
 
@@ -216,7 +199,7 @@ export default function Home() {
         delegatorAddress: address,
         validatorShareAddress: validatorShare,
         amount,
-        minSharesToMint: 0n,
+        slippageBps: 0,
       });
       console.log("Stake tx:", stakeTx);
       await sendTx(stakeTx);
@@ -230,7 +213,7 @@ export default function Home() {
         delegatorAddress: address,
         validatorShareAddress: validatorShare,
         amount,
-        maximumSharesToBurn: parseUnits(amount, 18),
+        slippageBps: 0,
       });
       console.log("Unstake tx:", tx);
       await sendTx(tx);

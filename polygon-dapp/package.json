@@ -9,7 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@chorus-one/polygon": "file:../../chorus-one-sdk/packages/polygon",
+    "@chorus-one/polygon": "file:../../deployment-repos/chorus-one-sdk/packages/polygon",
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-switch": "^1.2.6",
     "@rainbow-me/rainbowkit": "^2.2.10",

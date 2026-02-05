@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@chorus-one/polygon':
-        specifier: file:../../chorus-one-sdk/packages/polygon
-        version: file:../../chorus-one-sdk/packages/polygon(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+        specifier: file:../../deployment-repos/chorus-one-sdk/packages/polygon
+        version: file:../../deployment-repos/chorus-one-sdk/packages/polygon(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       '@radix-ui/react-slot':
         specifier: ^1.2.4
         version: 1.2.4(@types/react@19.2.10)(react@19.2.4)
@@ -162,8 +162,8 @@ packages:
   '@base-org/account@2.4.0':
     resolution: {integrity: sha512-A4Umpi8B9/pqR78D1Yoze4xHyQaujioVRqqO3d6xuDFw9VRtjg6tK3bPlwE0aW+nVH/ntllCpPa2PbI8Rnjcug==}
 
-  '@chorus-one/polygon@file:../../chorus-one-sdk/packages/polygon':
-    resolution: {directory: ../../chorus-one-sdk/packages/polygon, type: directory}
+  '@chorus-one/polygon@file:../../deployment-repos/chorus-one-sdk/packages/polygon':
+    resolution: {directory: ../../deployment-repos/chorus-one-sdk/packages/polygon, type: directory}
 
   '@chorus-one/signer@1.0.0':
     resolution: {integrity: sha512-Oj3MpKIvPfkMnkZMNt9wdGb2Cwo5BY9ExOxhQYv95uQaFJARpSE8a1mM+90LNIS0OvpjZt8wqdIzwnwR/KMe4w==}
@@ -4196,7 +4196,7 @@ snapshots:
       - utf-8-validate
       - zod
 
-  '@chorus-one/polygon@file:../../chorus-one-sdk/packages/polygon(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)':
+  '@chorus-one/polygon@file:../../deployment-repos/chorus-one-sdk/packages/polygon(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)':
     dependencies:
       '@chorus-one/signer': 1.0.0
       '@noble/curves': 2.0.1
