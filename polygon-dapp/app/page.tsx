@@ -257,6 +257,15 @@ export default function Home() {
       await sendTx(tx);
     });
 
+  const revokeApproval = () =>
+    exec(async () => {
+      if (!staker || !address) return;
+      setStatus("Revoking POL approval...");
+      const { tx } = await staker.buildApproveTx({ amount: "0.01" });
+      console.log("Revoke approval tx:", tx);
+      await sendTx(tx);
+    });
+
   return (
     <main className="mx-auto max-w-3xl space-y-4 p-6">
       <div className="flex items-center justify-between gap-4">
@@ -320,10 +329,22 @@ export default function Home() {
                 <p>Pending Rewards: {info.rewards} POL</p>
                 <p>Unbonding: {info.unbonding} POL</p>
                 <p>Withdrawable: {info.withdrawable} POL</p>
-                <p>
-                  Allowance: {info.allowance}
-                  {info.allowance !== "Unlimited" && " POL"}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p>
+                    Allowance: {info.allowance}
+                    {info.allowance !== "Unlimited" && " POL"}
+                  </p>
+                  {info.allowance !== "0" && (
+                    <Button
+                      size="xs"
+                      variant="destructive"
+                      disabled={loading}
+                      onClick={revokeApproval}
+                    >
+                      Revoke
+                    </Button>
+                  )}
+                </div>
                 <p>Current Epoch: {info.epoch}</p>
                 <p>Withdrawal Delay: {info.withdrawalDelay} epochs</p>
               </CardContent>
