@@ -1,16 +1,17 @@
 import { sepolia, mainnet } from "wagmi/chains";
+import { CHORUS_ONE_POLYGON_VALIDATORS } from "@chorus-one/polygon";
 
 export type NetworkType = "testnet" | "mainnet";
 
 export const networkConfig = {
   testnet: {
     chain: sepolia,
-    validatorShare: "0x91344055cb0511b3aa36c561d741ee356b95f1c9" as const,
+    validatorShare: CHORUS_ONE_POLYGON_VALIDATORS.testnet,
     label: "Sepolia",
   },
   mainnet: {
     chain: mainnet,
-    validatorShare: "0x857679d69fE50E7B722f94aCd2629d80C355163d" as const,
+    validatorShare: CHORUS_ONE_POLYGON_VALIDATORS.mainnet,
     label: "Ethereum",
   },
 } as const;

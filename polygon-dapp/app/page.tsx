@@ -9,7 +9,7 @@ import {
   useBalance,
 } from "wagmi";
 import { parseEther, maxUint256, formatEther, type Address } from "viem";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +28,7 @@ import {
 } from "@chorus-one/polygon";
 import { useNetwork } from "@/lib/network-context";
 import { networkConfig } from "@/lib/network";
+import { rpcUrls } from "@/lib/wagmi";
 
 type UnbondItem = UnbondInfo & { nonce: bigint };
 
@@ -57,7 +58,8 @@ export default function Home() {
   const validatorShare = currentConfig.validatorShare;
   const stakingTokenAddress = NETWORK_CONTRACTS[network].stakingTokenAddress;
 
-  const staker = useMemo(() => new PolygonStaker({ network }), [network]);
+  const rpcUrl = rpcUrls[currentConfig.chain.id];
+  const staker = new PolygonStaker({ network, rpcUrl });
 
   const { data: polBalance } = useBalance({
     address,
