@@ -40,7 +40,7 @@ pub fn handler(
     );
 
     // 3. Compute message hash for close (empty inner_instructions)
-    let message_hash = compute_message_hash(CHAIN_ID, ctx.program_id, nonce, &[]);
+    let message_hash = compute_message_hash(CHAIN_ID, ctx.program_id, nonce, &[])?;
 
     // 4. Recover eth address
     let recovered = recover_eth_address(&message_hash, &signature, recovery_id)?;

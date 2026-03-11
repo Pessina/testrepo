@@ -14,4 +14,8 @@ pub enum EcdsaProxyError {
     InvalidRecoveryId,
     #[msg("Invalid signature length")]
     InvalidSignatureLength,
+    #[msg("Account index out of bounds")]
+    InvalidAccountIndex,
+    #[msg("Failed to serialize inner instruction")]
+    SerializationFailed,
 }

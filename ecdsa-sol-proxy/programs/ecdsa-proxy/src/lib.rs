@@ -15,16 +15,25 @@ declare_id!("95nLhd1ntaNMntT4LvNTMc7LExwzv6Unwv1xBeRFmBj1");
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct InnerInstruction {
-    pub program_id: Pubkey,
+    pub program_id_index: u8,
     pub accounts: Vec<InnerAccountMeta>,
     pub data: Vec<u8>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct InnerAccountMeta {
-    pub pubkey: Pubkey,
-    pub is_signer: bool,
-    pub is_writable: bool,
+    pub account_index: u8,
+    /// bit 0 = is_signer, bit 1 = is_writable
+    pub flags: u8,
+}
+
+impl InnerAccountMeta {
+    pub const fn is_signer(&self) -> bool {
+        self.flags & 0x01 != 0
+    }
+    pub const fn is_writable(&self) -> bool {
+        self.flags & 0x02 != 0
+    }
 }
 
 #[program]

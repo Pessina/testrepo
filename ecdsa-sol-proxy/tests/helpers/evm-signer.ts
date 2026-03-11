@@ -15,6 +15,23 @@ export interface InnerInstruction {
   data: Buffer;
 }
 
+/** Index-based version sent on-chain (flags: bit 0 = isSigner, bit 1 = isWritable) */
+export interface IndexedInnerAccountMeta {
+  accountIndex: number;
+  isSigner: boolean;
+  isWritable: boolean;
+}
+
+function packFlags(isSigner: boolean, isWritable: boolean): number {
+  return (isSigner ? 0x01 : 0) | (isWritable ? 0x02 : 0);
+}
+
+export interface IndexedInnerInstruction {
+  programIdIndex: number;
+  accounts: IndexedInnerAccountMeta[];
+  data: Buffer;
+}
+
 const CHAIN_ID = 1n;
 const WALLET_SEED = Buffer.from("ecdsa_proxy");
 const WALLET_PREFIX = Buffer.from("wallet");
@@ -31,33 +48,68 @@ export function ethAddressFromWallet(wallet: ethers.BaseWallet): Buffer {
   return Buffer.from(wallet.address.slice(2), "hex");
 }
 
-function borshSerializeInnerInstruction(ix: InnerInstruction): Buffer {
-  const programIdBuf = ix.programId.toBuffer();
+/**
+ * Convert pubkey-based InnerInstructions to index-based, given a remaining_accounts list.
+ * Returns the indexed instructions that match the indices in remainingAccounts.
+ */
+export function toIndexedInnerInstructions(
+  innerInstructions: InnerInstruction[],
+  remainingAccounts: PublicKey[]
+): IndexedInnerInstruction[] {
+  const keyToIndex = new Map<string, number>();
+  remainingAccounts.forEach((key, i) => keyToIndex.set(key.toBase58(), i));
+
+  return innerInstructions.map((ix) => {
+    const programIdIndex = keyToIndex.get(ix.programId.toBase58());
+    if (programIdIndex === undefined) {
+      throw new Error(`Program ID ${ix.programId.toBase58()} not found in remainingAccounts`);
+    }
+    return {
+      programIdIndex,
+      accounts: ix.accounts.map((a) => {
+        const accountIndex = keyToIndex.get(a.pubkey.toBase58());
+        if (accountIndex === undefined) {
+          throw new Error(`Account ${a.pubkey.toBase58()} not found in remainingAccounts`);
+        }
+        return {
+          accountIndex,
+          isSigner: a.isSigner,
+          isWritable: a.isWritable,
+        };
+      }),
+      data: ix.data,
+    };
+  });
+}
+
+/** Borsh-serialize an IndexedInnerInstruction (matches on-chain Borsh layout) */
+function borshSerializeIndexedInnerInstruction(ix: IndexedInnerInstruction): Buffer {
+  const programIdIndexBuf = Buffer.alloc(1);
+  programIdIndexBuf[0] = ix.programIdIndex;
 
   const accountsLen = Buffer.alloc(4);
   accountsLen.writeUInt32LE(ix.accounts.length, 0);
   const accountsBufs = ix.accounts.map((a) => {
-    const buf = Buffer.alloc(34);
-    a.pubkey.toBuffer().copy(buf, 0);
-    buf[32] = a.isSigner ? 1 : 0;
-    buf[33] = a.isWritable ? 1 : 0;
+    const buf = Buffer.alloc(2);
+    buf[0] = a.accountIndex;
+    buf[1] = packFlags(a.isSigner, a.isWritable);
     return buf;
   });
 
   const dataLen = Buffer.alloc(4);
   dataLen.writeUInt32LE(ix.data.length, 0);
 
-  return Buffer.concat([programIdBuf, accountsLen, ...accountsBufs, dataLen, ix.data]);
+  return Buffer.concat([programIdIndexBuf, accountsLen, ...accountsBufs, dataLen, ix.data]);
 }
 
 export function computeInnerHash(
   programId: PublicKey,
   nonce: bigint,
-  innerInstructions: InnerInstruction[]
+  indexedInstructions: IndexedInnerInstruction[]
 ): Buffer {
   const instructionsData = Buffer.concat(
-    innerInstructions.length > 0
-      ? innerInstructions.map(borshSerializeInnerInstruction)
+    indexedInstructions.length > 0
+      ? indexedInstructions.map(borshSerializeIndexedInnerInstruction)
       : [Buffer.alloc(0)]
   );
   const instructionsHash = Buffer.from(keccak_256.arrayBuffer(instructionsData));
@@ -75,11 +127,11 @@ export function computeInnerHashWithChainId(
   chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
-  innerInstructions: InnerInstruction[]
+  indexedInstructions: IndexedInnerInstruction[]
 ): Buffer {
   const instructionsData = Buffer.concat(
-    innerInstructions.length > 0
-      ? innerInstructions.map(borshSerializeInnerInstruction)
+    indexedInstructions.length > 0
+      ? indexedInstructions.map(borshSerializeIndexedInnerInstruction)
       : [Buffer.alloc(0)]
   );
   const instructionsHash = Buffer.from(keccak_256.arrayBuffer(instructionsData));
@@ -97,9 +149,9 @@ export async function signMessage(
   wallet: ethers.BaseWallet,
   programId: PublicKey,
   nonce: bigint,
-  innerInstructions: InnerInstruction[]
+  indexedInstructions: IndexedInnerInstruction[]
 ): Promise<{ signature: Buffer; recoveryId: number }> {
-  const innerHash = computeInnerHash(programId, nonce, innerInstructions);
+  const innerHash = computeInnerHash(programId, nonce, indexedInstructions);
   const sig = await wallet.signMessage(innerHash);
 
   const sigBytes = Buffer.from(sig.slice(2), "hex");
@@ -116,9 +168,9 @@ export async function signMessageWithChainId(
   chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
-  innerInstructions: InnerInstruction[]
+  indexedInstructions: IndexedInnerInstruction[]
 ): Promise<{ signature: Buffer; recoveryId: number }> {
-  const innerHash = computeInnerHashWithChainId(chainId, programId, nonce, innerInstructions);
+  const innerHash = computeInnerHashWithChainId(chainId, programId, nonce, indexedInstructions);
   const sig = await wallet.signMessage(innerHash);
   const sigBytes = Buffer.from(sig.slice(2), "hex");
   return {
@@ -138,14 +190,51 @@ export function makeHighS(signature: Buffer): Buffer {
   return Buffer.concat([r, Buffer.from(highSHex, "hex")]);
 }
 
-export function toAnchorInnerInstructions(innerInstructions: InnerInstruction[]) {
-  return innerInstructions.map((ix) => ({
-    programId: ix.programId,
+export function toAnchorInnerInstructions(indexedInstructions: IndexedInnerInstruction[]) {
+  return indexedInstructions.map((ix) => ({
+    programIdIndex: ix.programIdIndex,
     accounts: ix.accounts.map((a) => ({
-      pubkey: a.pubkey,
-      isSigner: a.isSigner,
-      isWritable: a.isWritable,
+      accountIndex: a.accountIndex,
+      flags: packFlags(a.isSigner, a.isWritable),
     })),
     data: ix.data,
   }));
+}
+
+/**
+ * Build a remainingAccounts list from pubkey-based InnerInstructions,
+ * deduplicating keys while preserving order.
+ */
+export function buildRemainingAccounts(
+  innerInstructions: InnerInstruction[]
+): { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] {
+  const seen = new Map<string, { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }>();
+
+  for (const ix of innerInstructions) {
+    for (const acct of ix.accounts) {
+      const key = acct.pubkey.toBase58();
+      const existing = seen.get(key);
+      if (existing) {
+        // Merge: isWritable is true if any usage is writable
+        existing.isWritable = existing.isWritable || acct.isWritable;
+      } else {
+        seen.set(key, {
+          pubkey: acct.pubkey,
+          isSigner: false, // PDA signs via invoke_signed, not at tx level
+          isWritable: acct.isWritable,
+        });
+      }
+    }
+    // Add program ID
+    const progKey = ix.programId.toBase58();
+    if (!seen.has(progKey)) {
+      seen.set(progKey, {
+        pubkey: ix.programId,
+        isSigner: false,
+        isWritable: false,
+      });
+    }
+  }
+
+  return Array.from(seen.values());
 }

@@ -41,7 +41,7 @@ pub fn handler(
     );
 
     // 3. Compute message hash
-    let message_hash = compute_message_hash(CHAIN_ID, ctx.program_id, nonce, &inner_instructions);
+    let message_hash = compute_message_hash(CHAIN_ID, ctx.program_id, nonce, &inner_instructions)?;
 
     // 4. Recover eth address
     let recovered = recover_eth_address(&message_hash, &signature, recovery_id)?;
@@ -63,23 +63,34 @@ pub fn handler(
         &[wallet_state.bump],
     ];
 
-    for ix in inner_instructions.iter() {
-        let mut account_metas = Vec::new();
-        for acct in ix.accounts.iter() {
-            if acct.is_writable {
-                account_metas.push(AccountMeta::new(acct.pubkey, acct.is_signer));
+    let remaining = ctx.remaining_accounts;
+
+    for ix in inner_instructions.into_iter() {
+        let program_id = *remaining
+            .get(ix.program_id_index as usize)
+            .ok_or(EcdsaProxyError::InvalidAccountIndex)?
+            .key;
+
+        let mut account_metas = Vec::with_capacity(ix.accounts.len());
+        for acct in &ix.accounts {
+            let key = *remaining
+                .get(acct.account_index as usize)
+                .ok_or(EcdsaProxyError::InvalidAccountIndex)?
+                .key;
+            if acct.is_writable() {
+                account_metas.push(AccountMeta::new(key, acct.is_signer()));
             } else {
-                account_metas.push(AccountMeta::new_readonly(acct.pubkey, acct.is_signer));
+                account_metas.push(AccountMeta::new_readonly(key, acct.is_signer()));
             }
         }
 
         let instruction = Instruction {
-            program_id: ix.program_id,
+            program_id,
             accounts: account_metas,
-            data: ix.data.clone(),
+            data: ix.data, // moved, no clone
         };
 
-        invoke_signed(&instruction, ctx.remaining_accounts, &[signer_seeds])?;
+        invoke_signed(&instruction, remaining, &[signer_seeds])?;
     }
 
     Ok(())
