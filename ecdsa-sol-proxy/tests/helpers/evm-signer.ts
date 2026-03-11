@@ -23,17 +23,11 @@ const SECP256K1_ORDER = BigInt(
   "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
 );
 
-export function deriveWalletPDA(
-  ethAddress: Buffer,
-  programId: PublicKey
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [WALLET_SEED, WALLET_PREFIX, ethAddress],
-    programId
-  );
+export function deriveWalletPDA(ethAddress: Buffer, programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([WALLET_SEED, WALLET_PREFIX, ethAddress], programId);
 }
 
-export function ethAddressFromWallet(wallet: ethers.Wallet): Buffer {
+export function ethAddressFromWallet(wallet: ethers.BaseWallet): Buffer {
   return Buffer.from(wallet.address.slice(2), "hex");
 }
 
@@ -53,13 +47,7 @@ function borshSerializeInnerInstruction(ix: InnerInstruction): Buffer {
   const dataLen = Buffer.alloc(4);
   dataLen.writeUInt32LE(ix.data.length, 0);
 
-  return Buffer.concat([
-    programIdBuf,
-    accountsLen,
-    ...accountsBufs,
-    dataLen,
-    ix.data,
-  ]);
+  return Buffer.concat([programIdBuf, accountsLen, ...accountsBufs, dataLen, ix.data]);
 }
 
 export function computeInnerHash(
@@ -72,9 +60,7 @@ export function computeInnerHash(
       ? innerInstructions.map(borshSerializeInnerInstruction)
       : [Buffer.alloc(0)]
   );
-  const instructionsHash = Buffer.from(
-    keccak_256.arrayBuffer(instructionsData)
-  );
+  const instructionsHash = Buffer.from(keccak_256.arrayBuffer(instructionsData));
 
   const innerData = Buffer.alloc(8 + 32 + 8 + 32);
   innerData.writeBigUInt64LE(CHAIN_ID, 0);
@@ -96,9 +82,7 @@ export function computeInnerHashWithChainId(
       ? innerInstructions.map(borshSerializeInnerInstruction)
       : [Buffer.alloc(0)]
   );
-  const instructionsHash = Buffer.from(
-    keccak_256.arrayBuffer(instructionsData)
-  );
+  const instructionsHash = Buffer.from(keccak_256.arrayBuffer(instructionsData));
 
   const innerData = Buffer.alloc(8 + 32 + 8 + 32);
   innerData.writeBigUInt64LE(chainId, 0);
@@ -110,7 +94,7 @@ export function computeInnerHashWithChainId(
 }
 
 export async function signMessage(
-  wallet: ethers.Wallet,
+  wallet: ethers.BaseWallet,
   programId: PublicKey,
   nonce: bigint,
   innerInstructions: InnerInstruction[]
@@ -128,18 +112,13 @@ export async function signMessage(
 }
 
 export async function signMessageWithChainId(
-  wallet: ethers.Wallet,
+  wallet: ethers.BaseWallet,
   chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
   innerInstructions: InnerInstruction[]
 ): Promise<{ signature: Buffer; recoveryId: number }> {
-  const innerHash = computeInnerHashWithChainId(
-    chainId,
-    programId,
-    nonce,
-    innerInstructions
-  );
+  const innerHash = computeInnerHashWithChainId(chainId, programId, nonce, innerInstructions);
   const sig = await wallet.signMessage(innerHash);
   const sigBytes = Buffer.from(sig.slice(2), "hex");
   return {
@@ -152,16 +131,14 @@ export function makeHighS(signature: Buffer): Buffer {
   const r = signature.slice(0, 32);
   const s = signature.slice(32, 64);
 
-  let sBigInt = BigInt("0x" + s.toString("hex"));
+  const sBigInt = BigInt("0x" + s.toString("hex"));
   const highS = SECP256K1_ORDER - sBigInt;
   const highSHex = highS.toString(16).padStart(64, "0");
 
   return Buffer.concat([r, Buffer.from(highSHex, "hex")]);
 }
 
-export function toAnchorInnerInstructions(
-  innerInstructions: InnerInstruction[]
-) {
+export function toAnchorInnerInstructions(innerInstructions: InnerInstruction[]) {
   return innerInstructions.map((ix) => ({
     programId: ix.programId,
     accounts: ix.accounts.map((a) => ({

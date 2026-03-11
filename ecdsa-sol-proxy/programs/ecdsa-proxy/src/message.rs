@@ -12,7 +12,9 @@ pub fn compute_message_hash(
     // 1. Borsh-serialize each inner instruction, concatenate, then keccak256
     let mut instructions_data = Vec::new();
     for ix in inner_instructions {
-        let serialized = ix.try_to_vec().expect("failed to serialize inner instruction");
+        let serialized = ix
+            .try_to_vec()
+            .expect("failed to serialize inner instruction");
         instructions_data.extend_from_slice(&serialized);
     }
     let instructions_hash = keccak_hash(&instructions_data);

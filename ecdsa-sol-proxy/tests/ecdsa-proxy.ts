@@ -3,20 +3,13 @@ import { Program } from "@coral-xyz/anchor";
 import { EcdsaProxy } from "../target/types/ecdsa_proxy";
 import { ethers } from "ethers";
 import { expect } from "chai";
-import {
-  Keypair,
-  PublicKey,
-  SystemProgram,
-  LAMPORTS_PER_SOL,
-  Transaction,
-} from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import {
   createMint,
   getOrCreateAssociatedTokenAccount,
   mintTo,
   getAccount,
   TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
   createTransferInstruction,
 } from "@solana/spl-token";
 import {
@@ -88,13 +81,7 @@ describe("ecdsa-proxy", () => {
     [walletPDA, walletBump] = deriveWalletPDA(ethAddress, programId);
     [wallet2PDA] = deriveWalletPDA(ethAddress2, programId);
 
-    mint = await createMint(
-      provider.connection,
-      payer,
-      payer.publicKey,
-      null,
-      6
-    );
+    mint = await createMint(provider.connection, payer, payer.publicKey, null, 6);
   });
 
   // ── Test 1: Initialize wallet ──────────────────────────────────────
@@ -120,8 +107,8 @@ describe("ecdsa-proxy", () => {
         .accounts({ payer: payer.publicKey })
         .rpc();
       expect.fail("Should have thrown");
-    } catch (err: any) {
-      expect(err).to.exist;
+    } catch (err: unknown) {
+      expect(err).to.not.equal(undefined);
     }
   });
 
@@ -130,31 +117,14 @@ describe("ecdsa-proxy", () => {
   it("3. Execute SPL token transfer — PDA signs as authority, tokens move, nonce increments", async () => {
     pdaTokenAccount = await createATA(walletPDA);
 
-    await mintTo(
-      provider.connection,
-      payer,
-      mint,
-      pdaTokenAccount,
-      payer,
-      1_000_000
-    );
+    await mintTo(provider.connection, payer, mint, pdaTokenAccount, payer, 1_000_000);
 
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const transferAmount = 100_000n;
-    const innerIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      transferAmount
-    );
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, transferAmount);
 
     const nonce = await getNonce(walletPDA);
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      nonce,
-      [innerIx]
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [innerIx]);
 
     await program.methods
       .execute(
@@ -187,20 +157,10 @@ describe("ecdsa-proxy", () => {
   it("4. Execute second token transfer — nonce increments correctly", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const transferAmount = 50_000n;
-    const innerIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      transferAmount
-    );
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, transferAmount);
 
     const nonce = await getNonce(walletPDA);
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      nonce,
-      [innerIx]
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [innerIx]);
 
     await program.methods
       .execute(
@@ -230,20 +190,10 @@ describe("ecdsa-proxy", () => {
 
   it("5. Replay protection — same signed message fails after execution", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      10_000n
-    );
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const nonce = await getNonce(walletPDA);
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      nonce,
-      [innerIx]
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [innerIx]);
 
     const accounts = { walletState: walletPDA, payer: payer.publicKey };
     const remainingAccounts = [
@@ -276,8 +226,8 @@ describe("ecdsa-proxy", () => {
         .remainingAccounts(remainingAccounts)
         .rpc();
       expect.fail("Should have thrown NonceMismatch");
-    } catch (err: any) {
-      expect(err.toString()).to.include("NonceMismatch");
+    } catch (err: unknown) {
+      expect(String(err)).to.include("NonceMismatch");
     }
   });
 
@@ -285,12 +235,7 @@ describe("ecdsa-proxy", () => {
 
   it("6. Wrong signer — different EVM wallet fails (AddressMismatch)", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      10_000n
-    );
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const nonce = await getNonce(walletPDA);
     const { signature, recoveryId } = await signMessage(
@@ -320,8 +265,8 @@ describe("ecdsa-proxy", () => {
         ])
         .rpc();
       expect.fail("Should have thrown AddressMismatch");
-    } catch (err: any) {
-      expect(err.toString()).to.include("AddressMismatch");
+    } catch (err: unknown) {
+      expect(String(err)).to.include("AddressMismatch");
     }
   });
 
@@ -329,20 +274,12 @@ describe("ecdsa-proxy", () => {
 
   it("7. Nonce mismatch — wrong nonce value fails", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      10_000n
-    );
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const wrongNonce = 999n;
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      wrongNonce,
-      [innerIx]
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, wrongNonce, [
+      innerIx,
+    ]);
 
     try {
       await program.methods
@@ -364,8 +301,8 @@ describe("ecdsa-proxy", () => {
         ])
         .rpc();
       expect.fail("Should have thrown NonceMismatch");
-    } catch (err: any) {
-      expect(err.toString()).to.include("NonceMismatch");
+    } catch (err: unknown) {
+      expect(String(err)).to.include("NonceMismatch");
     }
   });
 
@@ -373,12 +310,7 @@ describe("ecdsa-proxy", () => {
 
   it("8. Wrong chain_id — different chain_id produces AddressMismatch", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      10_000n
-    );
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const nonce = await getNonce(walletPDA);
     const { signature, recoveryId } = await signMessageWithChainId(
@@ -409,8 +341,8 @@ describe("ecdsa-proxy", () => {
         ])
         .rpc();
       expect.fail("Should have thrown AddressMismatch");
-    } catch (err: any) {
-      expect(err.toString()).to.include("AddressMismatch");
+    } catch (err: unknown) {
+      expect(String(err)).to.include("AddressMismatch");
     }
   });
 
@@ -418,20 +350,10 @@ describe("ecdsa-proxy", () => {
 
   it("9. Signature malleability — high-S signature rejected", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      10_000n
-    );
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const nonce = await getNonce(walletPDA);
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      nonce,
-      [innerIx]
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [innerIx]);
 
     const malleableSig = makeHighS(signature);
 
@@ -455,8 +377,8 @@ describe("ecdsa-proxy", () => {
         ])
         .rpc();
       expect.fail("Should have thrown SignatureMalleability");
-    } catch (err: any) {
-      expect(err.toString()).to.include("SignatureMalleability");
+    } catch (err: unknown) {
+      expect(String(err)).to.include("SignatureMalleability");
     }
   });
 
@@ -466,26 +388,14 @@ describe("ecdsa-proxy", () => {
     const recipientTA1 = await createATA(Keypair.generate().publicKey);
     const recipientTA2 = await createATA(Keypair.generate().publicKey);
 
-    const innerIx1 = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA1,
-      walletPDA,
-      20_000n
-    );
-    const innerIx2 = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA2,
-      walletPDA,
-      30_000n
-    );
+    const innerIx1 = buildTokenTransferIx(pdaTokenAccount, recipientTA1, walletPDA, 20_000n);
+    const innerIx2 = buildTokenTransferIx(pdaTokenAccount, recipientTA2, walletPDA, 30_000n);
 
     const nonce = await getNonce(walletPDA);
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      nonce,
-      [innerIx1, innerIx2]
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [
+      innerIx1,
+      innerIx2,
+    ]);
 
     await program.methods
       .execute(
@@ -520,23 +430,12 @@ describe("ecdsa-proxy", () => {
     const rentRecipient = Keypair.generate();
     const nonce = await getNonce(walletPDA);
 
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      nonce,
-      []
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, []);
 
-    const recipientBalanceBefore = await provider.connection.getBalance(
-      rentRecipient.publicKey
-    );
+    const recipientBalanceBefore = await provider.connection.getBalance(rentRecipient.publicKey);
 
     await program.methods
-      .closeWallet(
-        Array.from(signature),
-        recoveryId,
-        new anchor.BN(nonce.toString())
-      )
+      .closeWallet(Array.from(signature), recoveryId, new anchor.BN(nonce.toString()))
       .accounts({
         walletState: walletPDA,
         payer: payer.publicKey,
@@ -545,11 +444,9 @@ describe("ecdsa-proxy", () => {
       .rpc();
 
     const accountInfo = await provider.connection.getAccountInfo(walletPDA);
-    expect(accountInfo).to.be.null;
+    expect(accountInfo).to.equal(null);
 
-    const recipientBalanceAfter = await provider.connection.getBalance(
-      rentRecipient.publicKey
-    );
+    const recipientBalanceAfter = await provider.connection.getBalance(rentRecipient.publicKey);
     expect(recipientBalanceAfter).to.be.greaterThan(recipientBalanceBefore);
   });
 
@@ -562,20 +459,11 @@ describe("ecdsa-proxy", () => {
       .rpc();
 
     // Try closing wallet2 with evmWallet (wrong — wallet2 belongs to evmWallet2)
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      0n,
-      []
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, 0n, []);
 
     try {
       await program.methods
-        .closeWallet(
-          Array.from(signature),
-          recoveryId,
-          new anchor.BN(0)
-        )
+        .closeWallet(Array.from(signature), recoveryId, new anchor.BN(0))
         .accounts({
           walletState: wallet2PDA,
           payer: payer.publicKey,
@@ -583,8 +471,8 @@ describe("ecdsa-proxy", () => {
         })
         .rpc();
       expect.fail("Should have thrown AddressMismatch");
-    } catch (err: any) {
-      expect(err.toString()).to.include("AddressMismatch");
+    } catch (err: unknown) {
+      expect(String(err)).to.include("AddressMismatch");
     }
   });
 
@@ -605,33 +493,16 @@ describe("ecdsa-proxy", () => {
 
   it("14. Execute after re-init — nonce resets to 0", async () => {
     // The ATA for this PDA already exists from before close. Mint more tokens.
-    await mintTo(
-      provider.connection,
-      payer,
-      mint,
-      pdaTokenAccount,
-      payer,
-      500_000
-    );
+    await mintTo(provider.connection, payer, mint, pdaTokenAccount, payer, 500_000);
 
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const transferAmount = 10_000n;
-    const innerIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      transferAmount
-    );
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, transferAmount);
 
     const nonce = await getNonce(walletPDA);
     expect(Number(nonce)).to.equal(0);
 
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      nonce,
-      [innerIx]
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [innerIx]);
 
     await program.methods
       .execute(
@@ -662,28 +533,13 @@ describe("ecdsa-proxy", () => {
   it("15. Tampered instruction data — modified inner ix after signing fails", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
 
-    const innerIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      10_000n
-    );
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const nonce = await getNonce(walletPDA);
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      programId,
-      nonce,
-      [innerIx]
-    );
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [innerIx]);
 
     // Tamper: different amount
-    const tamperedIx = buildTokenTransferIx(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      999_999n
-    );
+    const tamperedIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 999_999n);
 
     try {
       await program.methods
@@ -705,8 +561,8 @@ describe("ecdsa-proxy", () => {
         ])
         .rpc();
       expect.fail("Should have thrown AddressMismatch");
-    } catch (err: any) {
-      expect(err.toString()).to.include("AddressMismatch");
+    } catch (err: unknown) {
+      expect(String(err)).to.include("AddressMismatch");
     }
   });
 
