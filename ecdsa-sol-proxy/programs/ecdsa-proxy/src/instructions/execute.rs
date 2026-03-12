@@ -2,13 +2,13 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 
+use crate::constants::ChainId;
 use crate::constants::{WALLET_PREFIX, WALLET_SEED};
 use crate::ecdsa::{recover_eth_address, verify_low_s};
 use crate::error::EcdsaProxyError;
 use crate::message::compute_message_hash;
 use crate::state::WalletState;
 use crate::InnerInstruction;
-use crate::CHAIN_ID;
 
 #[derive(Accounts)]
 pub struct Execute<'info> {
@@ -27,42 +27,35 @@ pub fn handler(
     signature: [u8; 64],
     recovery_id: u8,
     nonce: u64,
+    chain_id: ChainId,
     inner_instructions: Vec<InnerInstruction>,
 ) -> Result<()> {
     let wallet_state = &mut ctx.accounts.wallet_state;
 
-    // 1. Check nonce
     require!(nonce == wallet_state.nonce, EcdsaProxyError::NonceMismatch);
-
-    // 2. Verify low-S
     require!(
         verify_low_s(&signature),
         EcdsaProxyError::SignatureMalleability
     );
 
-    // 3. Compute message hash (includes remaining_accounts pubkeys to bind indices to addresses)
+    // remaining_accounts pubkeys are hashed to bind indices to addresses
     let remaining_keys: Vec<Pubkey> = ctx.remaining_accounts.iter().map(|a| *a.key).collect();
     let message_hash = compute_message_hash(
-        CHAIN_ID,
+        chain_id,
         ctx.program_id,
         nonce,
         &remaining_keys,
         &inner_instructions,
     )?;
 
-    // 4. Recover eth address
     let recovered = recover_eth_address(&message_hash, &signature, recovery_id)?;
-
-    // 5. Verify recovered == wallet_state.eth_address
     require!(
         recovered == wallet_state.eth_address,
         EcdsaProxyError::AddressMismatch
     );
 
-    // 6. Increment nonce
     wallet_state.nonce += 1;
 
-    // 7. CPI for each inner instruction
     let signer_seeds: &[&[u8]] = &[
         WALLET_SEED,
         WALLET_PREFIX,
@@ -94,7 +87,7 @@ pub fn handler(
         let instruction = Instruction {
             program_id,
             accounts: account_metas,
-            data: ix.data, // moved, no clone
+            data: ix.data,
         };
 
         invoke_signed(&instruction, remaining, &[signer_seeds])?;

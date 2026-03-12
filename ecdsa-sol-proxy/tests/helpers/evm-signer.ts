@@ -32,7 +32,15 @@ export interface IndexedInnerInstruction {
   data: Buffer;
 }
 
-const CHAIN_ID = 1n;
+/** Maps ChainId enum variants to their u64 values used in message hashing */
+export const CHAIN_ID_VALUES = {
+  mainnet: 1n,
+  devnet: 2n,
+  testnet: 3n,
+} as const;
+
+export type ChainIdName = keyof typeof CHAIN_ID_VALUES;
+
 const WALLET_SEED = Buffer.from("ecdsa_proxy");
 const WALLET_PREFIX = Buffer.from("wallet");
 
@@ -103,6 +111,7 @@ function borshSerializeIndexedInnerInstruction(ix: IndexedInnerInstruction): Buf
 }
 
 export function computeInnerHash(
+  chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
   remainingAccountKeys: PublicKey[],
@@ -121,33 +130,6 @@ export function computeInnerHash(
 
   // chain_id(8) || program_id(32) || nonce(8) || accounts_hash(32) || instructions_hash(32) = 112
   const innerData = Buffer.alloc(8 + 32 + 8 + 32 + 32);
-  innerData.writeBigUInt64LE(CHAIN_ID, 0);
-  programId.toBuffer().copy(innerData, 8);
-  innerData.writeBigUInt64LE(nonce, 40);
-  accountsHash.copy(innerData, 48);
-  instructionsHash.copy(innerData, 80);
-
-  return Buffer.from(keccak_256.arrayBuffer(innerData));
-}
-
-export function computeInnerHashWithChainId(
-  chainId: bigint,
-  programId: PublicKey,
-  nonce: bigint,
-  remainingAccountKeys: PublicKey[],
-  indexedInstructions: IndexedInnerInstruction[]
-): Buffer {
-  const instructionsData = Buffer.concat(
-    indexedInstructions.length > 0
-      ? indexedInstructions.map(borshSerializeIndexedInnerInstruction)
-      : [Buffer.alloc(0)]
-  );
-  const instructionsHash = Buffer.from(keccak_256.arrayBuffer(instructionsData));
-
-  const accountsData = Buffer.concat(remainingAccountKeys.map((k) => k.toBuffer()));
-  const accountsHash = Buffer.from(keccak_256.arrayBuffer(accountsData));
-
-  const innerData = Buffer.alloc(8 + 32 + 8 + 32 + 32);
   innerData.writeBigUInt64LE(chainId, 0);
   programId.toBuffer().copy(innerData, 8);
   innerData.writeBigUInt64LE(nonce, 40);
@@ -159,12 +141,19 @@ export function computeInnerHashWithChainId(
 
 export async function signMessage(
   wallet: ethers.BaseWallet,
+  chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
   remainingAccountKeys: PublicKey[],
   indexedInstructions: IndexedInnerInstruction[]
 ): Promise<{ signature: Buffer; recoveryId: number }> {
-  const innerHash = computeInnerHash(programId, nonce, remainingAccountKeys, indexedInstructions);
+  const innerHash = computeInnerHash(
+    chainId,
+    programId,
+    nonce,
+    remainingAccountKeys,
+    indexedInstructions
+  );
   const sig = await wallet.signMessage(innerHash);
 
   const sigBytes = Buffer.from(sig.slice(2), "hex");
@@ -174,29 +163,6 @@ export async function signMessage(
   const recoveryId = v - 27;
 
   return { signature: Buffer.concat([r, s]), recoveryId };
-}
-
-export async function signMessageWithChainId(
-  wallet: ethers.BaseWallet,
-  chainId: bigint,
-  programId: PublicKey,
-  nonce: bigint,
-  remainingAccountKeys: PublicKey[],
-  indexedInstructions: IndexedInnerInstruction[]
-): Promise<{ signature: Buffer; recoveryId: number }> {
-  const innerHash = computeInnerHashWithChainId(
-    chainId,
-    programId,
-    nonce,
-    remainingAccountKeys,
-    indexedInstructions
-  );
-  const sig = await wallet.signMessage(innerHash);
-  const sigBytes = Buffer.from(sig.slice(2), "hex");
-  return {
-    signature: Buffer.concat([sigBytes.slice(0, 32), sigBytes.slice(32, 64)]),
-    recoveryId: sigBytes[64] - 27,
-  };
 }
 
 export function makeHighS(signature: Buffer): Buffer {

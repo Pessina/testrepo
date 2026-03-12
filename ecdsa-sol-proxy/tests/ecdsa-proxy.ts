@@ -15,11 +15,11 @@ import {
   deriveWalletPDA,
   ethAddressFromWallet,
   signMessage,
-  signMessageWithChainId,
   makeHighS,
   toAnchorInnerInstructions,
   toIndexedInnerInstructions,
   buildRemainingAccounts,
+  CHAIN_ID_VALUES,
   InnerInstruction,
 } from "./helpers/evm-signer";
 
@@ -78,6 +78,8 @@ describe("ecdsa-proxy", () => {
     };
   }
 
+  const chainId = CHAIN_ID_VALUES.mainnet;
+
   /** Helper: sign + build indexed instructions from pubkey-based ones */
   async function signAndIndex(
     wallet: ethers.BaseWallet,
@@ -89,6 +91,7 @@ describe("ecdsa-proxy", () => {
     const indexed = toIndexedInnerInstructions(innerIxs, remainingKeys);
     const { signature, recoveryId } = await signMessage(
       wallet,
+      chainId,
       programId,
       nonce,
       remainingKeys,
@@ -157,6 +160,7 @@ describe("ecdsa-proxy", () => {
         Array.from(signature),
         recoveryId,
         new anchor.BN(nonce.toString()),
+        { mainnet: {} },
         toAnchorInnerInstructions(indexed)
       )
       .accounts({
@@ -194,6 +198,7 @@ describe("ecdsa-proxy", () => {
         Array.from(signature),
         recoveryId,
         new anchor.BN(nonce.toString()),
+        { mainnet: {} },
         toAnchorInnerInstructions(indexed)
       )
       .accounts({
@@ -230,6 +235,7 @@ describe("ecdsa-proxy", () => {
         Array.from(signature),
         recoveryId,
         new anchor.BN(nonce.toString()),
+        { mainnet: {} },
         toAnchorInnerInstructions(indexed)
       )
       .accounts(accounts)
@@ -242,6 +248,7 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(nonce.toString()),
+          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts(accounts)
@@ -274,6 +281,7 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(nonce.toString()),
+          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts({
@@ -309,6 +317,7 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(wrongNonce.toString()),
+          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts({
@@ -333,9 +342,9 @@ describe("ecdsa-proxy", () => {
     const remainingKeys = remaining.map((r) => r.pubkey);
     const indexed = toIndexedInnerInstructions([innerIx], remainingKeys);
     const nonce = await getNonce(walletPDA);
-    const { signature, recoveryId } = await signMessageWithChainId(
+    const { signature, recoveryId } = await signMessage(
       evmWallet,
-      42n, // wrong chain_id
+      42n, // wrong chain_id — signed with 42 but program receives mainnet (1)
       programId,
       nonce,
       remainingKeys,
@@ -348,6 +357,7 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(nonce.toString()),
+          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts({
@@ -385,6 +395,7 @@ describe("ecdsa-proxy", () => {
           Array.from(malleableSig),
           recoveryId,
           new anchor.BN(nonce.toString()),
+          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts({
@@ -422,6 +433,7 @@ describe("ecdsa-proxy", () => {
         Array.from(signature),
         recoveryId,
         new anchor.BN(nonce.toString()),
+        { mainnet: {} },
         toAnchorInnerInstructions(indexed)
       )
       .accounts({
@@ -445,12 +457,21 @@ describe("ecdsa-proxy", () => {
     const nonce = await getNonce(walletPDA);
 
     // close uses empty remaining accounts and empty instructions
-    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [], []);
+    const { signature, recoveryId } = await signMessage(
+      evmWallet,
+      chainId,
+      programId,
+      nonce,
+      [],
+      []
+    );
 
     const recipientBalanceBefore = await provider.connection.getBalance(rentRecipient.publicKey);
 
     await program.methods
-      .closeWallet(Array.from(signature), recoveryId, new anchor.BN(nonce.toString()))
+      .closeWallet(Array.from(signature), recoveryId, new anchor.BN(nonce.toString()), {
+        mainnet: {},
+      })
       .accounts({
         walletState: walletPDA,
         payer: payer.publicKey,
@@ -474,11 +495,11 @@ describe("ecdsa-proxy", () => {
       .rpc();
 
     // Try closing wallet2 with evmWallet (wrong — wallet2 belongs to evmWallet2)
-    const { signature, recoveryId } = await signMessage(evmWallet, programId, 0n, [], []);
+    const { signature, recoveryId } = await signMessage(evmWallet, chainId, programId, 0n, [], []);
 
     try {
       await program.methods
-        .closeWallet(Array.from(signature), recoveryId, new anchor.BN(0))
+        .closeWallet(Array.from(signature), recoveryId, new anchor.BN(0), { mainnet: {} })
         .accounts({
           walletState: wallet2PDA,
           payer: payer.publicKey,
@@ -530,6 +551,7 @@ describe("ecdsa-proxy", () => {
         Array.from(signature),
         recoveryId,
         new anchor.BN(nonce.toString()),
+        { mainnet: {} },
         toAnchorInnerInstructions(indexed)
       )
       .accounts({
@@ -568,6 +590,7 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(nonce.toString()),
+          { mainnet: {} },
           toAnchorInnerInstructions(tamperedIndexed)
         )
         .accounts({
