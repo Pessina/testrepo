@@ -40,8 +40,15 @@ pub fn handler(
         EcdsaProxyError::SignatureMalleability
     );
 
-    // 3. Compute message hash
-    let message_hash = compute_message_hash(CHAIN_ID, ctx.program_id, nonce, &inner_instructions)?;
+    // 3. Compute message hash (includes remaining_accounts pubkeys to bind indices to addresses)
+    let remaining_keys: Vec<Pubkey> = ctx.remaining_accounts.iter().map(|a| *a.key).collect();
+    let message_hash = compute_message_hash(
+        CHAIN_ID,
+        ctx.program_id,
+        nonce,
+        &remaining_keys,
+        &inner_instructions,
+    )?;
 
     // 4. Recover eth address
     let recovered = recover_eth_address(&message_hash, &signature, recovery_id)?;

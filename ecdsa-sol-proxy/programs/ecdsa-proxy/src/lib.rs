@@ -40,10 +40,12 @@ impl InnerAccountMeta {
 pub mod ecdsa_proxy {
     use super::*;
 
+    #[instruction(discriminator = 1)]
     pub fn initialize_wallet(ctx: Context<InitializeWallet>, eth_address: [u8; 20]) -> Result<()> {
         instructions::initialize_wallet::handler(ctx, eth_address)
     }
 
+    #[instruction(discriminator = 2)]
     pub fn execute(
         ctx: Context<Execute>,
         signature: [u8; 64],
@@ -54,6 +56,7 @@ pub mod ecdsa_proxy {
         instructions::execute::handler(ctx, signature, recovery_id, nonce, inner_instructions)
     }
 
+    #[instruction(discriminator = 3)]
     pub fn close_wallet(
         ctx: Context<CloseWallet>,
         signature: [u8; 64],

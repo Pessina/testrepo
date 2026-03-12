@@ -87,7 +87,13 @@ describe("ecdsa-proxy", () => {
   ) {
     const remainingKeys = remaining.map((r) => r.pubkey);
     const indexed = toIndexedInnerInstructions(innerIxs, remainingKeys);
-    const { signature, recoveryId } = await signMessage(wallet, programId, nonce, indexed);
+    const { signature, recoveryId } = await signMessage(
+      wallet,
+      programId,
+      nonce,
+      remainingKeys,
+      indexed
+    );
     return { signature, recoveryId, indexed };
   }
 
@@ -332,6 +338,7 @@ describe("ecdsa-proxy", () => {
       42n, // wrong chain_id
       programId,
       nonce,
+      remainingKeys,
       indexed
     );
 
@@ -437,8 +444,8 @@ describe("ecdsa-proxy", () => {
     const rentRecipient = Keypair.generate();
     const nonce = await getNonce(walletPDA);
 
-    // close uses empty instructions
-    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, []);
+    // close uses empty remaining accounts and empty instructions
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [], []);
 
     const recipientBalanceBefore = await provider.connection.getBalance(rentRecipient.publicKey);
 
@@ -467,7 +474,7 @@ describe("ecdsa-proxy", () => {
       .rpc();
 
     // Try closing wallet2 with evmWallet (wrong — wallet2 belongs to evmWallet2)
-    const { signature, recoveryId } = await signMessage(evmWallet, programId, 0n, []);
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, 0n, [], []);
 
     try {
       await program.methods

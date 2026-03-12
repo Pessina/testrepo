@@ -2,7 +2,15 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { EcdsaProxy } from "../target/types/ecdsa_proxy";
 import { ethers } from "ethers";
-import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import {
+  AddressLookupTableAccount,
+  AddressLookupTableProgram,
+  Keypair,
+  PublicKey,
+  Transaction,
+  TransactionMessage,
+  VersionedTransaction,
+} from "@solana/web3.js";
 import {
   createMint,
   getOrCreateAssociatedTokenAccount,
@@ -22,6 +30,7 @@ import {
 describe("benchmark-tx-size", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
+  const connection = provider.connection;
 
   const program = anchor.workspace.ecdsaProxy as Program<EcdsaProxy>;
   const programId = program.programId;
@@ -30,9 +39,17 @@ describe("benchmark-tx-size", () => {
   const evmWallet = ethers.Wallet.createRandom();
   const ethAddress = ethAddressFromWallet(evmWallet);
 
+  // Pre-generated keys for deterministic benchmarks
+  const fakeSwapProgram = Keypair.generate().publicKey;
+  const fakeSwapAccounts = Array.from({ length: 7 }, () => Keypair.generate().publicKey);
+
   let walletPDA: PublicKey;
   let mint: PublicKey;
   let pdaTokenAccount: PublicKey;
+  let recipientTA1: PublicKey;
+  let recipientTA2: PublicKey;
+  let recipientTA3: PublicKey;
+  let lookupTableAccount: AddressLookupTableAccount;
 
   function buildTokenTransferIx(
     source: PublicKey,
@@ -53,19 +70,15 @@ describe("benchmark-tx-size", () => {
   }
 
   function buildFakeSwapIx(authority: PublicKey): InnerInstruction {
-    const fakeProgram = Keypair.generate().publicKey;
-    const accounts = [];
-    for (let i = 0; i < 7; i++) {
-      accounts.push({
-        pubkey: Keypair.generate().publicKey,
-        isSigner: false,
-        isWritable: i < 4,
-      });
-    }
+    const accounts = fakeSwapAccounts.map((pubkey, i) => ({
+      pubkey,
+      isSigner: false,
+      isWritable: i < 4,
+    }));
     accounts.push({ pubkey: authority, isSigner: true, isWritable: false });
 
     return {
-      programId: fakeProgram,
+      programId: fakeSwapProgram,
       accounts,
       data: Buffer.alloc(20, 0xab),
     };
@@ -79,27 +92,98 @@ describe("benchmark-tx-size", () => {
       .accounts({ payer: payer.publicKey })
       .rpc();
 
-    mint = await createMint(provider.connection, payer, payer.publicKey, null, 6);
+    mint = await createMint(connection, payer, payer.publicKey, null, 6);
 
-    const ata = await getOrCreateAssociatedTokenAccount(
-      provider.connection,
-      payer,
-      mint,
-      walletPDA,
-      true
-    );
+    const ata = await getOrCreateAssociatedTokenAccount(connection, payer, mint, walletPDA, true);
     pdaTokenAccount = ata.address;
-    await mintTo(provider.connection, payer, mint, pdaTokenAccount, payer, 10_000_000);
+    await mintTo(connection, payer, mint, pdaTokenAccount, payer, 10_000_000);
+
+    // Pre-create recipient token accounts for all scenarios
+    recipientTA1 = (
+      await getOrCreateAssociatedTokenAccount(
+        connection,
+        payer,
+        mint,
+        Keypair.generate().publicKey,
+        true
+      )
+    ).address;
+    recipientTA2 = (
+      await getOrCreateAssociatedTokenAccount(
+        connection,
+        payer,
+        mint,
+        Keypair.generate().publicKey,
+        true
+      )
+    ).address;
+    recipientTA3 = (
+      await getOrCreateAssociatedTokenAccount(
+        connection,
+        payer,
+        mint,
+        Keypair.generate().publicKey,
+        true
+      )
+    ).address;
+
+    // Collect all addresses that will appear across all benchmark scenarios
+    const allInnerIxs = [
+      buildTokenTransferIx(pdaTokenAccount, recipientTA1, walletPDA, 1n),
+      buildTokenTransferIx(pdaTokenAccount, recipientTA2, walletPDA, 1n),
+      buildTokenTransferIx(pdaTokenAccount, recipientTA3, walletPDA, 1n),
+      buildFakeSwapIx(walletPDA),
+    ];
+    const allRemaining = buildRemainingAccounts(allInnerIxs);
+
+    // Include the program ID so it can also be compressed via ALT
+    const uniqueKeys = new Map<string, PublicKey>();
+    uniqueKeys.set(programId.toBase58(), programId);
+    for (const r of allRemaining) {
+      uniqueKeys.set(r.pubkey.toBase58(), r.pubkey);
+    }
+    const allAddresses = Array.from(uniqueKeys.values());
+
+    // Create and populate Address Lookup Table
+    // Use a past slot to ensure it's in SlotHashes sysvar
+    const slot = (await connection.getSlot("confirmed")) - 1;
+    const [createIx, tableAddress] = AddressLookupTableProgram.createLookupTable({
+      authority: payer.publicKey,
+      payer: payer.publicKey,
+      recentSlot: slot,
+    });
+    await provider.sendAndConfirm(new Transaction().add(createIx));
+
+    const extendIx = AddressLookupTableProgram.extendLookupTable({
+      lookupTable: tableAddress,
+      authority: payer.publicKey,
+      payer: payer.publicKey,
+      addresses: allAddresses,
+    });
+    await provider.sendAndConfirm(new Transaction().add(extendIx));
+
+    // Wait for ALT entries to be available
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const result = await connection.getAddressLookupTable(tableAddress);
+    if (!result.value) throw new Error("Failed to fetch address lookup table");
+    lookupTableAccount = result.value;
   });
 
-  async function measureTxSize(
+  async function measureTxSizes(
     innerIxs: InnerInstruction[],
     remaining: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[]
-  ): Promise<number> {
+  ): Promise<{ legacy: number; versioned: number }> {
     const remainingKeys = remaining.map((r) => r.pubkey);
     const indexed = toIndexedInnerInstructions(innerIxs, remainingKeys);
     const nonce = 0n;
-    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, indexed);
+    const { signature, recoveryId } = await signMessage(
+      evmWallet,
+      programId,
+      nonce,
+      remainingKeys,
+      indexed
+    );
 
     const ix = await program.methods
       .execute(
@@ -115,73 +199,75 @@ describe("benchmark-tx-size", () => {
       .remainingAccounts(remaining)
       .instruction();
 
-    const tx = new Transaction();
-    tx.add(ix);
-    tx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
-    tx.feePayer = payer.publicKey;
-    tx.sign(payer);
+    const { blockhash } = await connection.getLatestBlockhash();
 
-    const serialized = tx.serialize();
-    return serialized.length;
+    // Legacy transaction
+    const legacyTx = new Transaction();
+    legacyTx.add(ix);
+    legacyTx.recentBlockhash = blockhash;
+    legacyTx.feePayer = payer.publicKey;
+    legacyTx.sign(payer);
+    const legacy = legacyTx.serialize().length;
+
+    // Versioned transaction with Address Lookup Table
+    const messageV0 = new TransactionMessage({
+      payerKey: payer.publicKey,
+      recentBlockhash: blockhash,
+      instructions: [ix],
+    }).compileToV0Message([lookupTableAccount]);
+    const versionedTx = new VersionedTransaction(messageV0);
+    versionedTx.sign([payer]);
+    const versioned = versionedTx.serialize().length;
+
+    return { legacy, versioned };
   }
 
   it("Scenario 1: Single SPL transfer", async () => {
-    const recipientTA = (
-      await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        payer,
-        mint,
-        Keypair.generate().publicKey,
-        true
-      )
-    ).address;
-
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 100_000n);
+    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA1, walletPDA, 100_000n);
     const remaining = buildRemainingAccounts([innerIx]);
 
-    const size = await measureTxSize([innerIx], remaining);
+    const { legacy, versioned } = await measureTxSizes([innerIx], remaining);
+    const saved = legacy - versioned;
+    console.log(`[Benchmark] Single SPL transfer:`);
     console.log(
-      `[Benchmark] Single SPL transfer: ${size} bytes (${((size / 1232) * 100).toFixed(1)}%) — headroom: ${1232 - size} bytes`
+      `  Legacy:    ${legacy} bytes (${((legacy / 1232) * 100).toFixed(1)}%) — headroom: ${1232 - legacy}`
     );
+    console.log(
+      `  Versioned: ${versioned} bytes (${((versioned / 1232) * 100).toFixed(1)}%) — headroom: ${1232 - versioned}`
+    );
+    console.log(`  Saved:     ${saved} bytes with ALT`);
   });
 
   it("Scenario 2: Two SPL transfers", async () => {
-    const recipientTA1 = (
-      await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        payer,
-        mint,
-        Keypair.generate().publicKey,
-        true
-      )
-    ).address;
-    const recipientTA2 = (
-      await getOrCreateAssociatedTokenAccount(
-        provider.connection,
-        payer,
-        mint,
-        Keypair.generate().publicKey,
-        true
-      )
-    ).address;
-
     const innerIx1 = buildTokenTransferIx(pdaTokenAccount, recipientTA1, walletPDA, 50_000n);
     const innerIx2 = buildTokenTransferIx(pdaTokenAccount, recipientTA2, walletPDA, 30_000n);
     const remaining = buildRemainingAccounts([innerIx1, innerIx2]);
 
-    const size = await measureTxSize([innerIx1, innerIx2], remaining);
+    const { legacy, versioned } = await measureTxSizes([innerIx1, innerIx2], remaining);
+    const saved = legacy - versioned;
+    console.log(`[Benchmark] Two SPL transfers:`);
     console.log(
-      `[Benchmark] Two SPL transfers: ${size} bytes (${((size / 1232) * 100).toFixed(1)}%) — headroom: ${1232 - size} bytes`
+      `  Legacy:    ${legacy} bytes (${((legacy / 1232) * 100).toFixed(1)}%) — headroom: ${1232 - legacy}`
     );
+    console.log(
+      `  Versioned: ${versioned} bytes (${((versioned / 1232) * 100).toFixed(1)}%) — headroom: ${1232 - versioned}`
+    );
+    console.log(`  Saved:     ${saved} bytes with ALT`);
   });
 
   it("Scenario 3: Swap-like (8 accounts)", async () => {
     const innerIx = buildFakeSwapIx(walletPDA);
     const remaining = buildRemainingAccounts([innerIx]);
 
-    const size = await measureTxSize([innerIx], remaining);
+    const { legacy, versioned } = await measureTxSizes([innerIx], remaining);
+    const saved = legacy - versioned;
+    console.log(`[Benchmark] Swap-like (8 accts):`);
     console.log(
-      `[Benchmark] Swap-like (8 accts): ${size} bytes (${((size / 1232) * 100).toFixed(1)}%) — headroom: ${1232 - size} bytes`
+      `  Legacy:    ${legacy} bytes (${((legacy / 1232) * 100).toFixed(1)}%) — headroom: ${1232 - legacy}`
     );
+    console.log(
+      `  Versioned: ${versioned} bytes (${((versioned / 1232) * 100).toFixed(1)}%) — headroom: ${1232 - versioned}`
+    );
+    console.log(`  Saved:     ${saved} bytes with ALT`);
   });
 });

@@ -9,7 +9,7 @@ pub struct InitializeWallet<'info> {
     #[account(
         init,
         payer = payer,
-        space = 8 + WalletState::INIT_SPACE,
+        space = WalletState::DISCRIMINATOR.len() + WalletState::INIT_SPACE,
         seeds = [WALLET_SEED, WALLET_PREFIX, &eth_address],
         bump,
     )]

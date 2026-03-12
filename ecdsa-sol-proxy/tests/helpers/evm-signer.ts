@@ -105,6 +105,7 @@ function borshSerializeIndexedInnerInstruction(ix: IndexedInnerInstruction): Buf
 export function computeInnerHash(
   programId: PublicKey,
   nonce: bigint,
+  remainingAccountKeys: PublicKey[],
   indexedInstructions: IndexedInnerInstruction[]
 ): Buffer {
   const instructionsData = Buffer.concat(
@@ -114,11 +115,17 @@ export function computeInnerHash(
   );
   const instructionsHash = Buffer.from(keccak_256.arrayBuffer(instructionsData));
 
-  const innerData = Buffer.alloc(8 + 32 + 8 + 32);
+  // Hash remaining account keys: keccak256(key0 || key1 || ... || keyN)
+  const accountsData = Buffer.concat(remainingAccountKeys.map((k) => k.toBuffer()));
+  const accountsHash = Buffer.from(keccak_256.arrayBuffer(accountsData));
+
+  // chain_id(8) || program_id(32) || nonce(8) || accounts_hash(32) || instructions_hash(32) = 112
+  const innerData = Buffer.alloc(8 + 32 + 8 + 32 + 32);
   innerData.writeBigUInt64LE(CHAIN_ID, 0);
   programId.toBuffer().copy(innerData, 8);
   innerData.writeBigUInt64LE(nonce, 40);
-  instructionsHash.copy(innerData, 48);
+  accountsHash.copy(innerData, 48);
+  instructionsHash.copy(innerData, 80);
 
   return Buffer.from(keccak_256.arrayBuffer(innerData));
 }
@@ -127,6 +134,7 @@ export function computeInnerHashWithChainId(
   chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
+  remainingAccountKeys: PublicKey[],
   indexedInstructions: IndexedInnerInstruction[]
 ): Buffer {
   const instructionsData = Buffer.concat(
@@ -136,11 +144,15 @@ export function computeInnerHashWithChainId(
   );
   const instructionsHash = Buffer.from(keccak_256.arrayBuffer(instructionsData));
 
-  const innerData = Buffer.alloc(8 + 32 + 8 + 32);
+  const accountsData = Buffer.concat(remainingAccountKeys.map((k) => k.toBuffer()));
+  const accountsHash = Buffer.from(keccak_256.arrayBuffer(accountsData));
+
+  const innerData = Buffer.alloc(8 + 32 + 8 + 32 + 32);
   innerData.writeBigUInt64LE(chainId, 0);
   programId.toBuffer().copy(innerData, 8);
   innerData.writeBigUInt64LE(nonce, 40);
-  instructionsHash.copy(innerData, 48);
+  accountsHash.copy(innerData, 48);
+  instructionsHash.copy(innerData, 80);
 
   return Buffer.from(keccak_256.arrayBuffer(innerData));
 }
@@ -149,9 +161,10 @@ export async function signMessage(
   wallet: ethers.BaseWallet,
   programId: PublicKey,
   nonce: bigint,
+  remainingAccountKeys: PublicKey[],
   indexedInstructions: IndexedInnerInstruction[]
 ): Promise<{ signature: Buffer; recoveryId: number }> {
-  const innerHash = computeInnerHash(programId, nonce, indexedInstructions);
+  const innerHash = computeInnerHash(programId, nonce, remainingAccountKeys, indexedInstructions);
   const sig = await wallet.signMessage(innerHash);
 
   const sigBytes = Buffer.from(sig.slice(2), "hex");
@@ -168,9 +181,16 @@ export async function signMessageWithChainId(
   chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
+  remainingAccountKeys: PublicKey[],
   indexedInstructions: IndexedInnerInstruction[]
 ): Promise<{ signature: Buffer; recoveryId: number }> {
-  const innerHash = computeInnerHashWithChainId(chainId, programId, nonce, indexedInstructions);
+  const innerHash = computeInnerHashWithChainId(
+    chainId,
+    programId,
+    nonce,
+    remainingAccountKeys,
+    indexedInstructions
+  );
   const sig = await wallet.signMessage(innerHash);
   const sigBytes = Buffer.from(sig.slice(2), "hex");
   return {
