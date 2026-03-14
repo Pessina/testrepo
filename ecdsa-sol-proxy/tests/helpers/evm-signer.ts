@@ -23,14 +23,8 @@ export interface IndexedInnerInstruction {
   data: Buffer;
 }
 
-/** Maps ChainId enum variants to their u64 values used in message hashing */
-export const CHAIN_ID_VALUES = {
-  mainnet: 1n,
-  devnet: 2n,
-  testnet: 3n,
-} as const;
-
-export type ChainIdName = keyof typeof CHAIN_ID_VALUES;
+/** Must match the hardcoded CHAIN_ID in constants.rs (devnet = 2) */
+export const CHAIN_ID = 2n;
 
 const WALLET_SEED = Buffer.from("ecdsa_proxy");
 const WALLET_PREFIX = Buffer.from("wallet");
@@ -82,11 +76,11 @@ export function toIndexedInnerInstructions(
 }
 
 export function computeInnerHash(
-  chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
   remainingAccountKeys: PublicKey[],
-  indexedInstructions: IndexedInnerInstruction[]
+  indexedInstructions: IndexedInnerInstruction[],
+  chainIdOverride?: bigint
 ): Buffer {
   const instructionsData = Buffer.concat(
     indexedInstructions.map((ix) =>
@@ -108,7 +102,7 @@ export function computeInnerHash(
 
   // chain_id(8) || program_id(32) || nonce(8) || accounts_hash(32) || instructions_hash(32) = 112
   const innerData = Buffer.alloc(8 + 32 + 8 + 32 + 32);
-  innerData.writeBigUInt64LE(chainId, 0);
+  innerData.writeBigUInt64LE(chainIdOverride ?? CHAIN_ID, 0);
   programId.toBuffer().copy(innerData, 8);
   innerData.writeBigUInt64LE(nonce, 40);
   accountsHash.copy(innerData, 48);
@@ -119,18 +113,18 @@ export function computeInnerHash(
 
 export async function signMessage(
   account: PrivateKeyAccount,
-  chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
   remainingAccountKeys: PublicKey[],
-  indexedInstructions: IndexedInnerInstruction[]
+  indexedInstructions: IndexedInnerInstruction[],
+  chainIdOverride?: bigint
 ): Promise<{ signature: Buffer; recoveryId: number }> {
   const innerHash = computeInnerHash(
-    chainId,
     programId,
     nonce,
     remainingAccountKeys,
-    indexedInstructions
+    indexedInstructions,
+    chainIdOverride
   );
   const sig = parseSignature(await account.signMessage({ message: { raw: innerHash } }));
   const r = Buffer.from(hexToBytes(sig.r));

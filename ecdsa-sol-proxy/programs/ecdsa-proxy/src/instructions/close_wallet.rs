@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::{ChainId, WALLET_PREFIX, WALLET_SEED};
+use crate::constants::{WALLET_PREFIX, WALLET_SEED};
 use crate::ecdsa::{recover_eth_address, verify_low_s};
 use crate::error::EcdsaProxyError;
 use crate::message::compute_message_hash;
@@ -26,7 +26,6 @@ pub fn handler(
     signature: [u8; 64],
     recovery_id: u8,
     nonce: u64,
-    chain_id: ChainId,
 ) -> Result<()> {
     let wallet_state = &ctx.accounts.wallet_state;
 
@@ -36,7 +35,7 @@ pub fn handler(
         EcdsaProxyError::SignatureMalleability
     );
 
-    let message_hash = compute_message_hash(chain_id, ctx.program_id, nonce, &[], &[])?;
+    let message_hash = compute_message_hash(ctx.program_id, nonce, &[], &[])?;
     let recovered = recover_eth_address(&message_hash, &signature, recovery_id)?;
     require!(
         recovered == wallet_state.eth_address,

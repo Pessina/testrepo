@@ -74,84 +74,8 @@ After deduplication and cross-referencing, the unique findings consolidate into 
 
 **Recommendation:** Call `wallet_state.exit(&crate::ID)?` after the nonce increment and before the CPI loop to flush state. Also add an explicit check blocking self-CPI (defense-in-depth).
 
----
-
-### H-5: PDA Ownership Reassignment via System Program `Assign`
-
-**Flagged by:** 1 agent (CPI Privilege)
-**Location:** `execute.rs:75-100`
-
-**Description:** The PDA signs all inner CPIs. A signed inner instruction calling `SystemProgram::Assign` can change the PDA's owner to another program, permanently bricking the wallet (Anchor discriminator checks will fail on all future calls). This requires the ETH key holder's signature but is irreversible.
-
-**Recommendation:** Add a blocklist for destructive System Program instructions (`Assign`, `Allocate`) targeting the wallet PDA. E.g.:
-```rust
-require!(program_id != system_program::ID || /* not Assign */, EcdsaProxyError::ForbiddenCpi);
-```
-
----
-
-### H-6: No Explicit Guard Against Self-CPI
-
-**Flagged by:** 3 agents (Reentrancy, Input Validation, PDA Validation)
-**Location:** `execute.rs:75-100`
-
-**Description:** Nothing prevents `program_id_index` from pointing to the ecdsa-proxy program itself. Relies entirely on Anchor's implicit reentrancy guard. If that guard were ever disabled or bypassed, recursive execution with the PDA as signer becomes possible.
-
-**Recommendation:** Add:
-```rust
-require!(program_id != crate::ID, EcdsaProxyError::SelfCpiNotAllowed);
-```
-
----
-
-### H-7: Account Aliasing -- wallet_state PDA in remaining_accounts
-
-**Flagged by:** 2 agents (Reentrancy, PDA Validation)
-**Location:** `execute.rs:73-100`
-
-**Description:** No check prevents the `wallet_state` PDA from appearing in `remaining_accounts`. If passed as writable to a CPI, the target program could attempt to modify it. Solana runtime ownership checks prevent cross-program writes, and the self-CPI guard would prevent same-program writes -- but this relies on layered implicit protections.
-
-**Recommendation:** Add:
-```rust
-let wallet_key = wallet_state.key();
-for account in remaining.iter() {
-    require!(*account.key != wallet_key, EcdsaProxyError::AccountAliasing);
-}
-```
-
----
 
 ## MEDIUM
-
-### M-1: Relayer Griefing -- Payer Not in Signed Hash
-
-**Flagged by:** 1 agent (Economic)
-**Location:** `execute.rs`, `message.rs`
-
-**Description:** The `payer` is not included in the signed message. Anyone observing a pending transaction can extract the signature and resubmit with themselves as payer. The original relayer's tx fails with `NonceMismatch`. This is likely by-design (permissionless relaying) but creates disincentive for relayers.
-
-**Recommendation:** Document explicitly. If relayer protection is needed, include `payer` in the hash.
-
----
-
-### M-2: No Expiry / Deadline for Signed Messages
-
-**Flagged by:** 1 agent (Economic)
-
-**Description:** Signatures remain valid indefinitely until the nonce is consumed. Stale signatures can be executed in changed conditions.
-
-**Recommendation:** Add optional `expiry: u64` (Unix timestamp) to the signed payload with an on-chain `Clock` check.
-
----
-
-### M-3: Unbounded Inner Instructions Count
-
-**Flagged by:** 2 agents (DoS, Input Validation)
-**Location:** `execute.rs:30`, `lib.rs:54`
-
-**Description:** No explicit cap on `inner_instructions.len()`. While bounded by the 1232-byte tx limit, adding a `MAX_INNER_INSTRUCTIONS` constant would make compute costs predictable and fail fast with a clear error.
-
----
 
 ### M-4: CPI Depth Limit Reduces Composability
 

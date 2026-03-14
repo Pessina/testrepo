@@ -58,17 +58,9 @@ pub mod ecdsa_proxy {
         signature: [u8; 64],
         recovery_id: u8,
         nonce: u64,
-        chain_id: ChainId,
         inner_instructions: Vec<InnerInstruction>,
     ) -> Result<()> {
-        instructions::execute::handler(
-            ctx,
-            signature,
-            recovery_id,
-            nonce,
-            chain_id,
-            inner_instructions,
-        )
+        instructions::execute::handler(ctx, signature, recovery_id, nonce, inner_instructions)
     }
 
     /// Signature-gated PDA closure. Verifies the owner's ECDSA signature
@@ -79,8 +71,7 @@ pub mod ecdsa_proxy {
         signature: [u8; 64],
         recovery_id: u8,
         nonce: u64,
-        chain_id: ChainId,
     ) -> Result<()> {
-        instructions::close_wallet::handler(ctx, signature, recovery_id, nonce, chain_id)
+        instructions::close_wallet::handler(ctx, signature, recovery_id, nonce)
     }
 }

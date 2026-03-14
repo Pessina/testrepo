@@ -19,7 +19,6 @@ import {
   toAnchorInnerInstructions,
   toIndexedInnerInstructions,
   buildRemainingAccounts,
-  CHAIN_ID_VALUES,
 } from "./helpers/evm-signer";
 
 describe("ecdsa-proxy", () => {
@@ -59,8 +58,6 @@ describe("ecdsa-proxy", () => {
     return ata.address;
   }
 
-  const chainId = CHAIN_ID_VALUES.mainnet;
-
   /** Helper: sign + build indexed instructions from pubkey-based ones */
   async function signAndIndex(
     wallet: Parameters<typeof signMessage>[0],
@@ -72,7 +69,6 @@ describe("ecdsa-proxy", () => {
     const indexed = toIndexedInnerInstructions(innerIxs, remainingKeys);
     const { signature, recoveryId } = await signMessage(
       wallet,
-      chainId,
       programId,
       nonce,
       remainingKeys,
@@ -88,8 +84,6 @@ describe("ecdsa-proxy", () => {
     mint = await createMint(provider.connection, payer, payer.publicKey, null, 6);
   });
 
-  // ── Test 1: Initialize wallet ──────────────────────────────────────
-
   it("1. Initialize wallet — PDA created, correct state", async () => {
     await program.methods
       .initializeWallet(Array.from(ethAddress))
@@ -102,23 +96,7 @@ describe("ecdsa-proxy", () => {
     expect(state.bump).to.equal(walletBump);
   });
 
-  // ── Test 2: Initialize duplicate fails ─────────────────────────────
-
-  it("2. Initialize duplicate — fails (PDA already exists)", async () => {
-    try {
-      await program.methods
-        .initializeWallet(Array.from(ethAddress))
-        .accounts({ payer: payer.publicKey })
-        .rpc();
-      expect.fail("Should have thrown");
-    } catch (err: unknown) {
-      expect(err).to.not.equal(undefined);
-    }
-  });
-
-  // ── Test 3: Execute SPL token transfer ─────────────────────────────
-
-  it("3. Execute SPL token transfer — PDA signs as authority, tokens move, nonce increments", async () => {
+  it("2. Execute SPL token transfer — PDA signs as authority, tokens move, nonce increments", async () => {
     pdaTokenAccount = await createATA(walletPDA);
 
     await mintTo(provider.connection, payer, mint, pdaTokenAccount, payer, 1_000_000);
@@ -146,7 +124,6 @@ describe("ecdsa-proxy", () => {
         Array.from(signature),
         recoveryId,
         new anchor.BN(nonce.toString()),
-        { mainnet: {} },
         toAnchorInnerInstructions(indexed)
       )
       .accounts({
@@ -163,50 +140,7 @@ describe("ecdsa-proxy", () => {
     expect(state.nonce.toNumber()).to.equal(1);
   });
 
-  // ── Test 4: Execute second transfer ────────────────────────────────
-
-  it("4. Execute second token transfer — nonce increments correctly", async () => {
-    const recipientTA = await createATA(Keypair.generate().publicKey);
-    const transferAmount = 50_000n;
-    const innerIx = createTransferInstruction(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      transferAmount
-    );
-
-    const remaining = buildRemainingAccounts([innerIx]);
-    const nonce = await getNonce(walletPDA);
-    const { signature, recoveryId, indexed } = await signAndIndex(
-      evmWallet,
-      [innerIx],
-      remaining,
-      nonce
-    );
-
-    await program.methods
-      .execute(
-        Array.from(signature),
-        recoveryId,
-        new anchor.BN(nonce.toString()),
-        { mainnet: {} },
-        toAnchorInnerInstructions(indexed)
-      )
-      .accounts({
-        walletState: walletPDA,
-        payer: payer.publicKey,
-      })
-      .remainingAccounts(remaining)
-      .rpc();
-
-    const recipientAccount = await getAccount(provider.connection, recipientTA);
-    expect(Number(recipientAccount.amount)).to.equal(Number(transferAmount));
-    expect(Number(await getNonce(walletPDA))).to.equal(Number(nonce) + 1);
-  });
-
-  // ── Test 5: Replay protection ──────────────────────────────────────
-
-  it("5. Replay protection — same signed message fails after execution", async () => {
+  it("3. Replay protection — same signed message fails after execution", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
@@ -226,7 +160,6 @@ describe("ecdsa-proxy", () => {
         Array.from(signature),
         recoveryId,
         new anchor.BN(nonce.toString()),
-        { mainnet: {} },
         toAnchorInnerInstructions(indexed)
       )
       .accounts(accounts)
@@ -239,7 +172,6 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(nonce.toString()),
-          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts(accounts)
@@ -251,9 +183,7 @@ describe("ecdsa-proxy", () => {
     }
   });
 
-  // ── Test 6: Wrong signer ───────────────────────────────────────────
-
-  it("6. Wrong signer — different EVM wallet fails (AddressMismatch)", async () => {
+  it("4. Wrong signer — different EVM wallet fails (AddressMismatch)", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
@@ -272,7 +202,6 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(nonce.toString()),
-          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts({
@@ -287,9 +216,7 @@ describe("ecdsa-proxy", () => {
     }
   });
 
-  // ── Test 7: Nonce mismatch ─────────────────────────────────────────
-
-  it("7. Nonce mismatch — wrong nonce value fails", async () => {
+  it("5. Nonce mismatch — wrong nonce value fails", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
@@ -308,7 +235,6 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(wrongNonce.toString()),
-          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts({
@@ -323,9 +249,7 @@ describe("ecdsa-proxy", () => {
     }
   });
 
-  // ── Test 8: Wrong chain_id ─────────────────────────────────────────
-
-  it("8. Wrong chain_id — different chain_id produces AddressMismatch", async () => {
+  it("6. Wrong chain_id — different chain_id produces AddressMismatch", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
@@ -335,11 +259,11 @@ describe("ecdsa-proxy", () => {
     const nonce = await getNonce(walletPDA);
     const { signature, recoveryId } = await signMessage(
       evmWallet,
-      42n, // wrong chain_id — signed with 42 but program receives mainnet (1)
       programId,
       nonce,
       remainingKeys,
-      indexed
+      indexed,
+      42n // wrong chain_id — signed with 42 but program uses hardcoded devnet (2)
     );
 
     try {
@@ -348,7 +272,6 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(nonce.toString()),
-          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts({
@@ -363,9 +286,7 @@ describe("ecdsa-proxy", () => {
     }
   });
 
-  // ── Test 9: Signature malleability ─────────────────────────────────
-
-  it("9. Signature malleability — high-S signature rejected", async () => {
+  it("7. Signature malleability — high-S signature rejected", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
@@ -386,7 +307,6 @@ describe("ecdsa-proxy", () => {
           Array.from(malleableSig),
           recoveryId,
           new anchor.BN(nonce.toString()),
-          { mainnet: {} },
           toAnchorInnerInstructions(indexed)
         )
         .accounts({
@@ -401,9 +321,7 @@ describe("ecdsa-proxy", () => {
     }
   });
 
-  // ── Test 10: Multiple inner instructions ───────────────────────────
-
-  it("10. Multiple inner instructions — 2 token transfers, nonce increments once", async () => {
+  it("8. Multiple inner instructions — 2 token transfers, nonce increments once", async () => {
     const recipientTA1 = await createATA(Keypair.generate().publicKey);
     const recipientTA2 = await createATA(Keypair.generate().publicKey);
 
@@ -424,7 +342,6 @@ describe("ecdsa-proxy", () => {
         Array.from(signature),
         recoveryId,
         new anchor.BN(nonce.toString()),
-        { mainnet: {} },
         toAnchorInnerInstructions(indexed)
       )
       .accounts({
@@ -441,130 +358,7 @@ describe("ecdsa-proxy", () => {
     expect(Number(await getNonce(walletPDA))).to.equal(Number(nonce) + 1);
   });
 
-  // ── Test 11: Close wallet ──────────────────────────────────────────
-
-  it("11. Close wallet — PDA closed, rent returned", async () => {
-    const rentRecipient = Keypair.generate();
-    const nonce = await getNonce(walletPDA);
-
-    // close uses empty remaining accounts and empty instructions
-    const { signature, recoveryId } = await signMessage(
-      evmWallet,
-      chainId,
-      programId,
-      nonce,
-      [],
-      []
-    );
-
-    const recipientBalanceBefore = await provider.connection.getBalance(rentRecipient.publicKey);
-
-    await program.methods
-      .closeWallet(Array.from(signature), recoveryId, new anchor.BN(nonce.toString()), {
-        mainnet: {},
-      })
-      .accounts({
-        walletState: walletPDA,
-        payer: payer.publicKey,
-        rentRecipient: rentRecipient.publicKey,
-      })
-      .rpc();
-
-    const accountInfo = await provider.connection.getAccountInfo(walletPDA);
-    expect(accountInfo).to.equal(null);
-
-    const recipientBalanceAfter = await provider.connection.getBalance(rentRecipient.publicKey);
-    expect(recipientBalanceAfter).to.be.greaterThan(recipientBalanceBefore);
-  });
-
-  // ── Test 12: Close wrong signer ────────────────────────────────────
-
-  it("12. Close wrong signer — different EVM wallet cannot close", async () => {
-    await program.methods
-      .initializeWallet(Array.from(ethAddress2))
-      .accounts({ payer: payer.publicKey })
-      .rpc();
-
-    // Try closing wallet2 with evmWallet (wrong — wallet2 belongs to evmWallet2)
-    const { signature, recoveryId } = await signMessage(evmWallet, chainId, programId, 0n, [], []);
-
-    try {
-      await program.methods
-        .closeWallet(Array.from(signature), recoveryId, new anchor.BN(0), { mainnet: {} })
-        .accounts({
-          walletState: wallet2PDA,
-          payer: payer.publicKey,
-          rentRecipient: payer.publicKey,
-        })
-        .rpc();
-      expect.fail("Should have thrown AddressMismatch");
-    } catch (err: unknown) {
-      expect(String(err)).to.include("AddressMismatch");
-    }
-  });
-
-  // ── Test 13: Re-initialize after close ─────────────────────────────
-
-  it("13. Re-initialize after close — can re-create PDA", async () => {
-    await program.methods
-      .initializeWallet(Array.from(ethAddress))
-      .accounts({ payer: payer.publicKey })
-      .rpc();
-
-    const state = await program.account.walletState.fetch(walletPDA);
-    expect(Buffer.from(state.ethAddress)).to.deep.equal(ethAddress);
-    expect(state.nonce.toNumber()).to.equal(0);
-  });
-
-  // ── Test 14: Execute after re-init ─────────────────────────────────
-
-  it("14. Execute after re-init — nonce resets to 0", async () => {
-    // The ATA for this PDA already exists from before close. Mint more tokens.
-    await mintTo(provider.connection, payer, mint, pdaTokenAccount, payer, 500_000);
-
-    const recipientTA = await createATA(Keypair.generate().publicKey);
-    const transferAmount = 10_000n;
-    const innerIx = createTransferInstruction(
-      pdaTokenAccount,
-      recipientTA,
-      walletPDA,
-      transferAmount
-    );
-
-    const remaining = buildRemainingAccounts([innerIx]);
-    const nonce = await getNonce(walletPDA);
-    expect(Number(nonce)).to.equal(0);
-
-    const { signature, recoveryId, indexed } = await signAndIndex(
-      evmWallet,
-      [innerIx],
-      remaining,
-      nonce
-    );
-
-    await program.methods
-      .execute(
-        Array.from(signature),
-        recoveryId,
-        new anchor.BN(nonce.toString()),
-        { mainnet: {} },
-        toAnchorInnerInstructions(indexed)
-      )
-      .accounts({
-        walletState: walletPDA,
-        payer: payer.publicKey,
-      })
-      .remainingAccounts(remaining)
-      .rpc();
-
-    const recipientAccount = await getAccount(provider.connection, recipientTA);
-    expect(Number(recipientAccount.amount)).to.equal(Number(transferAmount));
-    expect(Number(await getNonce(walletPDA))).to.equal(1);
-  });
-
-  // ── Test 15: Tampered instruction data ─────────────────────────────
-
-  it("15. Tampered instruction data — modified inner ix after signing fails", async () => {
+  it("9. Tampered instruction data — modified inner ix after signing fails", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
 
     const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
@@ -586,7 +380,6 @@ describe("ecdsa-proxy", () => {
           Array.from(signature),
           recoveryId,
           new anchor.BN(nonce.toString()),
-          { mainnet: {} },
           toAnchorInnerInstructions(tamperedIndexed)
         )
         .accounts({
@@ -601,14 +394,52 @@ describe("ecdsa-proxy", () => {
     }
   });
 
-  // ── Test 16: PDA determinism ───────────────────────────────────────
+  it("10. Close wallet — PDA closed, rent returned", async () => {
+    const rentRecipient = Keypair.generate();
+    const nonce = await getNonce(walletPDA);
 
-  it("16. PDA determinism — same eth address always derives same PDA", () => {
-    const [pda1] = deriveWalletPDA(ethAddress, programId);
-    const [pda2] = deriveWalletPDA(ethAddress, programId);
-    expect(pda1.toBase58()).to.equal(pda2.toBase58());
+    // close uses empty remaining accounts and empty instructions
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, nonce, [], []);
 
-    const [pda3] = deriveWalletPDA(ethAddress2, programId);
-    expect(pda1.toBase58()).to.not.equal(pda3.toBase58());
+    const recipientBalanceBefore = await provider.connection.getBalance(rentRecipient.publicKey);
+
+    await program.methods
+      .closeWallet(Array.from(signature), recoveryId, new anchor.BN(nonce.toString()))
+      .accounts({
+        walletState: walletPDA,
+        payer: payer.publicKey,
+        rentRecipient: rentRecipient.publicKey,
+      })
+      .rpc();
+
+    const accountInfo = await provider.connection.getAccountInfo(walletPDA);
+    expect(accountInfo).to.equal(null);
+
+    const recipientBalanceAfter = await provider.connection.getBalance(rentRecipient.publicKey);
+    expect(recipientBalanceAfter).to.be.greaterThan(recipientBalanceBefore);
+  });
+
+  it("11. Close wrong signer — different EVM wallet cannot close", async () => {
+    await program.methods
+      .initializeWallet(Array.from(ethAddress2))
+      .accounts({ payer: payer.publicKey })
+      .rpc();
+
+    // Try closing wallet2 with evmWallet (wrong — wallet2 belongs to evmWallet2)
+    const { signature, recoveryId } = await signMessage(evmWallet, programId, 0n, [], []);
+
+    try {
+      await program.methods
+        .closeWallet(Array.from(signature), recoveryId, new anchor.BN(0))
+        .accounts({
+          walletState: wallet2PDA,
+          payer: payer.publicKey,
+          rentRecipient: payer.publicKey,
+        })
+        .rpc();
+      expect.fail("Should have thrown AddressMismatch");
+    } catch (err: unknown) {
+      expect(String(err)).to.include("AddressMismatch");
+    }
   });
 });

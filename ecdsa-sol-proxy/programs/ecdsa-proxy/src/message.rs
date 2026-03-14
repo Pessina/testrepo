@@ -2,16 +2,14 @@ use anchor_lang::prelude::*;
 use solana_keccak_hasher::hash as keccak_hash;
 use solana_keccak_hasher::hashv as keccak_hashv;
 
-use crate::constants::ChainId;
+use crate::constants::CHAIN_ID;
 use crate::error::EcdsaProxyError;
 use crate::InnerInstruction;
 
-/// Replay protection: `chain_id` binds the signature to a specific cluster
-/// (mainnet/devnet/testnet), `program_id` binds it to this deployment so it
-/// can't be replayed on a cloned program, and `nonce` prevents reuse on the
-/// same program+chain.
+/// Replay protection: `CHAIN_ID` (hardcoded) binds the signature to a specific
+/// cluster, `program_id` binds it to this deployment so it can't be replayed on
+/// a cloned program, and `nonce` prevents reuse on the same program+chain.
 pub fn compute_message_hash(
-    chain_id: ChainId,
     program_id: &Pubkey,
     nonce: u64,
     remaining_account_keys: &[Pubkey],
@@ -29,7 +27,7 @@ pub fn compute_message_hash(
 
     // chain_id(8) || program_id(32) || nonce(8) || accounts_hash(32) || instructions_hash(32) = 112
     let mut inner_data = [0u8; 112];
-    inner_data[0..8].copy_from_slice(&chain_id.to_u64().to_le_bytes());
+    inner_data[0..8].copy_from_slice(&CHAIN_ID.to_le_bytes());
     inner_data[8..40].copy_from_slice(&program_id.to_bytes());
     inner_data[40..48].copy_from_slice(&nonce.to_le_bytes());
     inner_data[48..80].copy_from_slice(&accounts_hash.to_bytes());

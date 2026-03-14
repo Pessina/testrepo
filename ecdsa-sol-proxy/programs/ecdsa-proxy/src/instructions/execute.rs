@@ -2,7 +2,6 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 
-use crate::constants::ChainId;
 use crate::constants::{WALLET_PREFIX, WALLET_SEED};
 use crate::ecdsa::{recover_eth_address, verify_low_s};
 use crate::error::EcdsaProxyError;
@@ -27,7 +26,6 @@ pub fn handler(
     signature: [u8; 64],
     recovery_id: u8,
     nonce: u64,
-    chain_id: ChainId,
     inner_instructions: Vec<InnerInstruction>,
 ) -> Result<()> {
     let wallet_state = &mut ctx.accounts.wallet_state;
@@ -40,13 +38,8 @@ pub fn handler(
 
     // remaining_accounts pubkeys are hashed to bind indices to addresses
     let remaining_keys: Vec<Pubkey> = ctx.remaining_accounts.iter().map(|a| *a.key).collect();
-    let message_hash = compute_message_hash(
-        chain_id,
-        ctx.program_id,
-        nonce,
-        &remaining_keys,
-        &inner_instructions,
-    )?;
+    let message_hash =
+        compute_message_hash(ctx.program_id, nonce, &remaining_keys, &inner_instructions)?;
 
     let recovered = recover_eth_address(&message_hash, &signature, recovery_id)?;
     require!(
