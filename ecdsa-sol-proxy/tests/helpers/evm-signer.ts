@@ -1,19 +1,10 @@
-import { ethers } from "ethers";
-import jsSha3 from "js-sha3";
-const { keccak_256 } = jsSha3;
-import { PublicKey } from "@solana/web3.js";
+import { BorshCoder, type Idl } from "@coral-xyz/anchor";
+import { PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { hexToBytes, keccak256, parseSignature } from "viem";
+import type { PrivateKeyAccount } from "viem/accounts";
+import idl from "../../target/idl/ecdsa_proxy.json";
 
-export interface InnerAccountMeta {
-  pubkey: PublicKey;
-  isSigner: boolean;
-  isWritable: boolean;
-}
-
-export interface InnerInstruction {
-  programId: PublicKey;
-  accounts: InnerAccountMeta[];
-  data: Buffer;
-}
+const coder = new BorshCoder(idl as Idl);
 
 /** Index-based version sent on-chain (flags: bit 0 = isSigner, bit 1 = isWritable) */
 export interface IndexedInnerAccountMeta {
@@ -52,8 +43,8 @@ export function deriveWalletPDA(ethAddress: Buffer, programId: PublicKey): [Publ
   return PublicKey.findProgramAddressSync([WALLET_SEED, WALLET_PREFIX, ethAddress], programId);
 }
 
-export function ethAddressFromWallet(wallet: ethers.BaseWallet): Buffer {
-  return Buffer.from(wallet.address.slice(2), "hex");
+export function ethAddressFromAccount(account: PrivateKeyAccount): Buffer {
+  return Buffer.from(hexToBytes(account.address));
 }
 
 /**
@@ -61,7 +52,7 @@ export function ethAddressFromWallet(wallet: ethers.BaseWallet): Buffer {
  * Returns the indexed instructions that match the indices in remainingAccounts.
  */
 export function toIndexedInnerInstructions(
-  innerInstructions: InnerInstruction[],
+  innerInstructions: TransactionInstruction[],
   remainingAccounts: PublicKey[]
 ): IndexedInnerInstruction[] {
   const keyToIndex = new Map<string, number>();
@@ -74,7 +65,7 @@ export function toIndexedInnerInstructions(
     }
     return {
       programIdIndex,
-      accounts: ix.accounts.map((a) => {
+      accounts: ix.keys.map((a) => {
         const accountIndex = keyToIndex.get(a.pubkey.toBase58());
         if (accountIndex === undefined) {
           throw new Error(`Account ${a.pubkey.toBase58()} not found in remainingAccounts`);
@@ -85,29 +76,9 @@ export function toIndexedInnerInstructions(
           isWritable: a.isWritable,
         };
       }),
-      data: ix.data,
+      data: Buffer.from(ix.data),
     };
   });
-}
-
-/** Borsh-serialize an IndexedInnerInstruction (matches on-chain Borsh layout) */
-function borshSerializeIndexedInnerInstruction(ix: IndexedInnerInstruction): Buffer {
-  const programIdIndexBuf = Buffer.alloc(1);
-  programIdIndexBuf[0] = ix.programIdIndex;
-
-  const accountsLen = Buffer.alloc(4);
-  accountsLen.writeUInt32LE(ix.accounts.length, 0);
-  const accountsBufs = ix.accounts.map((a) => {
-    const buf = Buffer.alloc(2);
-    buf[0] = a.accountIndex;
-    buf[1] = packFlags(a.isSigner, a.isWritable);
-    return buf;
-  });
-
-  const dataLen = Buffer.alloc(4);
-  dataLen.writeUInt32LE(ix.data.length, 0);
-
-  return Buffer.concat([programIdIndexBuf, accountsLen, ...accountsBufs, dataLen, ix.data]);
 }
 
 export function computeInnerHash(
@@ -118,15 +89,22 @@ export function computeInnerHash(
   indexedInstructions: IndexedInnerInstruction[]
 ): Buffer {
   const instructionsData = Buffer.concat(
-    indexedInstructions.length > 0
-      ? indexedInstructions.map(borshSerializeIndexedInnerInstruction)
-      : [Buffer.alloc(0)]
+    indexedInstructions.map((ix) =>
+      coder.types.encode("InnerInstruction", {
+        program_id_index: ix.programIdIndex,
+        accounts: ix.accounts.map((a) => ({
+          account_index: a.accountIndex,
+          flags: packFlags(a.isSigner, a.isWritable),
+        })),
+        data: ix.data,
+      })
+    )
   );
-  const instructionsHash = Buffer.from(keccak_256.arrayBuffer(instructionsData));
+  const instructionsHash = Buffer.from(keccak256(instructionsData, "bytes"));
 
   // Hash remaining account keys: keccak256(key0 || key1 || ... || keyN)
   const accountsData = Buffer.concat(remainingAccountKeys.map((k) => k.toBuffer()));
-  const accountsHash = Buffer.from(keccak_256.arrayBuffer(accountsData));
+  const accountsHash = Buffer.from(keccak256(accountsData, "bytes"));
 
   // chain_id(8) || program_id(32) || nonce(8) || accounts_hash(32) || instructions_hash(32) = 112
   const innerData = Buffer.alloc(8 + 32 + 8 + 32 + 32);
@@ -136,11 +114,11 @@ export function computeInnerHash(
   accountsHash.copy(innerData, 48);
   instructionsHash.copy(innerData, 80);
 
-  return Buffer.from(keccak_256.arrayBuffer(innerData));
+  return Buffer.from(keccak256(innerData, "bytes"));
 }
 
 export async function signMessage(
-  wallet: ethers.BaseWallet,
+  account: PrivateKeyAccount,
   chainId: bigint,
   programId: PublicKey,
   nonce: bigint,
@@ -154,15 +132,11 @@ export async function signMessage(
     remainingAccountKeys,
     indexedInstructions
   );
-  const sig = await wallet.signMessage(innerHash);
+  const sig = parseSignature(await account.signMessage({ message: { raw: innerHash } }));
+  const r = Buffer.from(hexToBytes(sig.r));
+  const s = Buffer.from(hexToBytes(sig.s));
 
-  const sigBytes = Buffer.from(sig.slice(2), "hex");
-  const r = sigBytes.slice(0, 32);
-  const s = sigBytes.slice(32, 64);
-  const v = sigBytes[64];
-  const recoveryId = v - 27;
-
-  return { signature: Buffer.concat([r, s]), recoveryId };
+  return { signature: Buffer.concat([r, s]), recoveryId: sig.yParity };
 }
 
 export function makeHighS(signature: Buffer): Buffer {
@@ -192,12 +166,12 @@ export function toAnchorInnerInstructions(indexedInstructions: IndexedInnerInstr
  * deduplicating keys while preserving order.
  */
 export function buildRemainingAccounts(
-  innerInstructions: InnerInstruction[]
+  innerInstructions: TransactionInstruction[]
 ): { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] {
   const seen = new Map<string, { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }>();
 
   for (const ix of innerInstructions) {
-    for (const acct of ix.accounts) {
+    for (const acct of ix.keys) {
       const key = acct.pubkey.toBase58();
       const existing = seen.get(key);
       if (existing) {

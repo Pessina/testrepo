@@ -1,9 +1,9 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { EcdsaProxy } from "../target/types/ecdsa_proxy";
-import { ethers } from "ethers";
 import { expect } from "chai";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
   createMint,
   getOrCreateAssociatedTokenAccount,
@@ -13,14 +13,13 @@ import {
 } from "@solana/spl-token";
 import {
   deriveWalletPDA,
-  ethAddressFromWallet,
+  ethAddressFromAccount,
   signMessage,
   makeHighS,
   toAnchorInnerInstructions,
   toIndexedInnerInstructions,
   buildRemainingAccounts,
   CHAIN_ID_VALUES,
-  InnerInstruction,
 } from "./helpers/evm-signer";
 
 describe("ecdsa-proxy", () => {
@@ -31,11 +30,11 @@ describe("ecdsa-proxy", () => {
   const programId = program.programId;
   const payer = (provider.wallet as anchor.Wallet).payer;
 
-  const evmWallet = ethers.Wallet.createRandom();
-  const evmWallet2 = ethers.Wallet.createRandom();
+  const evmWallet = privateKeyToAccount(generatePrivateKey());
+  const evmWallet2 = privateKeyToAccount(generatePrivateKey());
 
-  const ethAddress = ethAddressFromWallet(evmWallet);
-  const ethAddress2 = ethAddressFromWallet(evmWallet2);
+  const ethAddress = ethAddressFromAccount(evmWallet);
+  const ethAddress2 = ethAddressFromAccount(evmWallet2);
 
   let walletPDA: PublicKey;
   let walletBump: number;
@@ -60,30 +59,12 @@ describe("ecdsa-proxy", () => {
     return ata.address;
   }
 
-  function buildTokenTransferIx(
-    source: PublicKey,
-    dest: PublicKey,
-    authority: PublicKey,
-    amount: bigint
-  ): InnerInstruction {
-    const ix = createTransferInstruction(source, dest, authority, amount);
-    return {
-      programId: ix.programId,
-      accounts: ix.keys.map((k) => ({
-        pubkey: k.pubkey,
-        isSigner: k.isSigner,
-        isWritable: k.isWritable,
-      })),
-      data: Buffer.from(ix.data),
-    };
-  }
-
   const chainId = CHAIN_ID_VALUES.mainnet;
 
   /** Helper: sign + build indexed instructions from pubkey-based ones */
   async function signAndIndex(
-    wallet: ethers.BaseWallet,
-    innerIxs: InnerInstruction[],
+    wallet: Parameters<typeof signMessage>[0],
+    innerIxs: TransactionInstruction[],
     remaining: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[],
     nonce: bigint
   ) {
@@ -144,7 +125,12 @@ describe("ecdsa-proxy", () => {
 
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const transferAmount = 100_000n;
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, transferAmount);
+    const innerIx = createTransferInstruction(
+      pdaTokenAccount,
+      recipientTA,
+      walletPDA,
+      transferAmount
+    );
 
     const remaining = buildRemainingAccounts([innerIx]);
     const nonce = await getNonce(walletPDA);
@@ -182,7 +168,12 @@ describe("ecdsa-proxy", () => {
   it("4. Execute second token transfer — nonce increments correctly", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const transferAmount = 50_000n;
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, transferAmount);
+    const innerIx = createTransferInstruction(
+      pdaTokenAccount,
+      recipientTA,
+      walletPDA,
+      transferAmount
+    );
 
     const remaining = buildRemainingAccounts([innerIx]);
     const nonce = await getNonce(walletPDA);
@@ -217,7 +208,7 @@ describe("ecdsa-proxy", () => {
 
   it("5. Replay protection — same signed message fails after execution", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
+    const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const remaining = buildRemainingAccounts([innerIx]);
     const nonce = await getNonce(walletPDA);
@@ -264,7 +255,7 @@ describe("ecdsa-proxy", () => {
 
   it("6. Wrong signer — different EVM wallet fails (AddressMismatch)", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
+    const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const remaining = buildRemainingAccounts([innerIx]);
     const nonce = await getNonce(walletPDA);
@@ -300,7 +291,7 @@ describe("ecdsa-proxy", () => {
 
   it("7. Nonce mismatch — wrong nonce value fails", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
+    const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const remaining = buildRemainingAccounts([innerIx]);
     const wrongNonce = 999n;
@@ -336,7 +327,7 @@ describe("ecdsa-proxy", () => {
 
   it("8. Wrong chain_id — different chain_id produces AddressMismatch", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
+    const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const remaining = buildRemainingAccounts([innerIx]);
     const remainingKeys = remaining.map((r) => r.pubkey);
@@ -376,7 +367,7 @@ describe("ecdsa-proxy", () => {
 
   it("9. Signature malleability — high-S signature rejected", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
+    const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const remaining = buildRemainingAccounts([innerIx]);
     const nonce = await getNonce(walletPDA);
@@ -416,8 +407,8 @@ describe("ecdsa-proxy", () => {
     const recipientTA1 = await createATA(Keypair.generate().publicKey);
     const recipientTA2 = await createATA(Keypair.generate().publicKey);
 
-    const innerIx1 = buildTokenTransferIx(pdaTokenAccount, recipientTA1, walletPDA, 20_000n);
-    const innerIx2 = buildTokenTransferIx(pdaTokenAccount, recipientTA2, walletPDA, 30_000n);
+    const innerIx1 = createTransferInstruction(pdaTokenAccount, recipientTA1, walletPDA, 20_000n);
+    const innerIx2 = createTransferInstruction(pdaTokenAccount, recipientTA2, walletPDA, 30_000n);
 
     const remaining = buildRemainingAccounts([innerIx1, innerIx2]);
     const nonce = await getNonce(walletPDA);
@@ -533,7 +524,12 @@ describe("ecdsa-proxy", () => {
 
     const recipientTA = await createATA(Keypair.generate().publicKey);
     const transferAmount = 10_000n;
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, transferAmount);
+    const innerIx = createTransferInstruction(
+      pdaTokenAccount,
+      recipientTA,
+      walletPDA,
+      transferAmount
+    );
 
     const remaining = buildRemainingAccounts([innerIx]);
     const nonce = await getNonce(walletPDA);
@@ -571,14 +567,14 @@ describe("ecdsa-proxy", () => {
   it("15. Tampered instruction data — modified inner ix after signing fails", async () => {
     const recipientTA = await createATA(Keypair.generate().publicKey);
 
-    const innerIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
+    const innerIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 10_000n);
 
     const remaining = buildRemainingAccounts([innerIx]);
     const nonce = await getNonce(walletPDA);
     const { signature, recoveryId } = await signAndIndex(evmWallet, [innerIx], remaining, nonce);
 
     // Tamper: different amount
-    const tamperedIx = buildTokenTransferIx(pdaTokenAccount, recipientTA, walletPDA, 999_999n);
+    const tamperedIx = createTransferInstruction(pdaTokenAccount, recipientTA, walletPDA, 999_999n);
     const tamperedIndexed = toIndexedInnerInstructions(
       [tamperedIx],
       remaining.map((r) => r.pubkey)
