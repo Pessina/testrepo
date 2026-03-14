@@ -1,5 +1,5 @@
 {
-  "license": "ISC",
+  "license": "MIT",
   "scripts": {
     "lint": "eslint 'tests/**/*.ts' && prettier --check 'tests/**/*.ts'",
     "lint:fix": "eslint --fix 'tests/**/*.ts' && prettier --write 'tests/**/*.ts'",
