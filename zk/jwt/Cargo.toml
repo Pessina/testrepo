@@ -1,7 +1,0 @@
-[workspace]
-members = [
-    "program",
-    "script",
-    "server",
-]
-resolver = "2"
